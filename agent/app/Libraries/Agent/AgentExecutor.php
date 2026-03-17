@@ -13,7 +13,12 @@ use CodeIgniter\CLI\CLI;
  * executes tools, feeds results back, and loops until the model
  * produces a final response with no tool calls.
  *
- * This is what makes PHPClaw an agent rather than a dumb chat passthrough.
+ * Instead of a hard iteration cap, uses smart loop detection:
+ * - Tracks total tool calls across all iterations
+ * - Detects repeated identical tool calls (stuck in a loop)
+ * - Detects consecutive failures (model can't make progress)
+ * - Nudges the model to wrap up after many iterations
+ * - Only hard-stops at a very high safety limit (50 iterations)
  */
 class AgentExecutor
 {
@@ -24,8 +29,17 @@ class AgentExecutor
     private ?string $sessionId;
     private bool $debug;
 
-    /** Maximum tool call iterations per user message to prevent infinite loops. */
-    private int $maxIterations = 10;
+    /** Absolute safety limit - should never realistically hit this. */
+    private int $hardLimit = 50;
+
+    /** After this many iterations, nudge the model to wrap up. */
+    private int $nudgeAfter = 15;
+
+    /** Max consecutive identical tool call sets before declaring stuck. */
+    private int $maxRepeats = 3;
+
+    /** Max consecutive all-failed iterations before stopping. */
+    private int $maxConsecutiveFailures = 3;
 
     public function __construct(
         ModelRouter $router,
@@ -60,9 +74,13 @@ class AgentExecutor
     public function execute(string $role, array &$conversationHistory, string $systemPrompt): string
     {
         $iteration = 0;
+        $totalToolCalls = 0;
         $allDisplayText = [];
+        $previousCallSignatures = [];
+        $consecutiveFailures = 0;
+        $repeatCount = 0;
 
-        while ($iteration < $this->maxIterations) {
+        while ($iteration < $this->hardLimit) {
             $iteration++;
 
             // Build messages with system prompt
@@ -71,9 +89,15 @@ class AgentExecutor
                 $conversationHistory
             );
 
-            // Call LLM
+            // After many iterations, nudge the model to finish up
+            if ($iteration === $this->nudgeAfter + 1) {
+                $messages[] = ['role' => 'system', 'content' =>
+                    'You have been running tools for many iterations. Please finish up: summarize what you have so far and provide your final response to the user. Only make more tool calls if absolutely necessary to complete the task.'
+                ];
+            }
+
             if ($this->debug) {
-                CLI::write("[Agent] Iteration {$iteration}, sending " . count($messages) . " messages", 'dark_gray');
+                CLI::write("[Agent] Iteration {$iteration}, {$totalToolCalls} total tool calls, " . count($messages) . " messages", 'dark_gray');
             }
 
             $response = $this->router->chat($role, $messages);
@@ -96,39 +120,84 @@ class AgentExecutor
             // Show any display text before tool calls
             if ($parsed['display']) {
                 $allDisplayText[] = $parsed['display'];
+                // Print intermediate text so user sees progress
+                if ($parsed['has_tool_calls']) {
+                    CLI::write($parsed['display'], 'white');
+                }
             }
 
             // If no tool calls, we're done
             if (!$parsed['has_tool_calls']) {
-                // Add assistant message to history
                 $finalText = implode("\n\n", $allDisplayText);
                 $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
-
                 $this->logTranscript('assistant_message', 'assistant', $finalText, $response);
+
+                if ($this->debug) {
+                    CLI::write("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls", 'dark_gray');
+                }
                 return $finalText;
             }
 
+            // --- Loop detection ---
+
+            // Build a signature of this iteration's tool calls
+            $callSig = $this->buildCallSignature($parsed['tool_calls']);
+
+            // Check for repeated identical calls
+            if (!empty($previousCallSignatures) && end($previousCallSignatures) === $callSig) {
+                $repeatCount++;
+                if ($repeatCount >= $this->maxRepeats) {
+                    CLI::write("  [Agent] Detected repeated tool calls - breaking loop", 'yellow');
+                    $allDisplayText[] = "(Stopped: agent was repeating the same tool calls)";
+                    break;
+                }
+            } else {
+                $repeatCount = 0;
+            }
+            $previousCallSignatures[] = $callSig;
+
             // Execute tool calls
             $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
+            $totalToolCalls += count($toolResults);
+
+            // Check for all-failed iterations
+            $allFailed = true;
+            foreach ($toolResults as $r) {
+                if ($r['result']['success'] ?? false) {
+                    $allFailed = false;
+                    break;
+                }
+            }
+
+            if ($allFailed) {
+                $consecutiveFailures++;
+                if ($consecutiveFailures >= $this->maxConsecutiveFailures) {
+                    CLI::write("  [Agent] Too many consecutive tool failures - stopping", 'yellow');
+                    $allDisplayText[] = "(Stopped: tools failing repeatedly)";
+                    break;
+                }
+            } else {
+                $consecutiveFailures = 0;
+            }
 
             // Add assistant message + tool results to conversation history
             $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
 
-            // Format tool results as a message back to the model
-            $resultMessage = $this->formatToolResults($toolResults);
+            $resultMessage = $this->formatToolResults($toolResults, $iteration, $totalToolCalls);
             $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
-
-            if ($this->debug) {
-                CLI::write("[Agent] Tool results fed back, continuing loop", 'dark_gray');
-            }
         }
 
-        // Max iterations reached
+        // Reached a break or hard limit
         $finalText = implode("\n\n", $allDisplayText);
         if (empty($finalText)) {
-            $finalText = "(Agent reached maximum tool iterations)";
+            $finalText = "(Agent could not complete the task)";
         }
         $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
+
+        if ($this->debug) {
+            CLI::write("[Agent] Stopped after {$iteration} iterations, {$totalToolCalls} tool calls", 'dark_gray');
+        }
+
         return $finalText;
     }
 
@@ -143,7 +212,7 @@ class AgentExecutor
             $toolName = $call['name'];
             $toolArgs = $call['args'] ?? [];
 
-            CLI::write("  > Running tool: {$toolName}", 'cyan');
+            CLI::write("  > {$toolName}", 'cyan');
 
             if ($this->debug) {
                 CLI::write("    Args: " . json_encode($toolArgs, JSON_UNESCAPED_SLASHES), 'dark_gray');
@@ -153,14 +222,13 @@ class AgentExecutor
 
             $success = $result['success'] ?? false;
             $statusColor = $success ? 'green' : 'red';
-            $statusText = $success ? 'OK' : 'FAILED';
+            $statusText = $success ? 'ok' : 'FAILED';
             CLI::write("    [{$statusText}]", $statusColor);
 
-            if ($this->debug && !$success) {
-                CLI::write("    Error: " . ($result['error'] ?? 'unknown'), 'red');
+            if (!$success) {
+                CLI::write("    " . ($result['error'] ?? 'unknown error'), 'red');
             }
 
-            // Log tool event
             $this->logToolEvent($toolName, $toolArgs, $result, $providerResponse);
 
             $results[] = [
@@ -176,9 +244,9 @@ class AgentExecutor
     /**
      * Format tool results into a message the model can understand.
      */
-    private function formatToolResults(array $results): string
+    private function formatToolResults(array $results, int $iteration, int $totalCalls): string
     {
-        $parts = ["[Tool Results]"];
+        $parts = ["[Tool Results - iteration {$iteration}, {$totalCalls} total calls]"];
 
         foreach ($results as $r) {
             $toolName = $r['tool'];
@@ -187,10 +255,9 @@ class AgentExecutor
 
             if ($success) {
                 $data = $result['data'] ?? $result;
-                // Truncate very large outputs
                 $json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
-                if (strlen($json) > 4000) {
-                    $json = substr($json, 0, 4000) . "\n... (truncated)";
+                if (strlen($json) > 8000) {
+                    $json = substr($json, 0, 8000) . "\n... (truncated, " . strlen($json) . " bytes total)";
                 }
                 $parts[] = "<tool_result name=\"{$toolName}\" status=\"success\">\n{$json}\n</tool_result>";
             } else {
@@ -199,9 +266,22 @@ class AgentExecutor
             }
         }
 
-        $parts[] = "\nUse these results to respond to the user. If more tools are needed, call them. Otherwise, provide your final response.";
+        $parts[] = "\nContinue working on the user's request. Call more tools if needed, or provide your final response.";
 
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * Build a fingerprint of a set of tool calls for loop detection.
+     */
+    private function buildCallSignature(array $toolCalls): string
+    {
+        $sigs = [];
+        foreach ($toolCalls as $call) {
+            $sigs[] = ($call['name'] ?? '') . ':' . json_encode($call['args'] ?? []);
+        }
+        sort($sigs);
+        return md5(implode('|', $sigs));
     }
 
     /**
@@ -236,7 +316,6 @@ class AgentExecutor
             'model' => $response['model'] ?? null,
         ]);
 
-        // Also log to transcript
         $status = ($result['success'] ?? false) ? 'success' : 'failed';
         $this->sessions->appendTranscript($this->sessionId, [
             'event_type' => 'tool_call',
