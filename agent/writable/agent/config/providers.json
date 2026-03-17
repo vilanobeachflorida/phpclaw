@@ -1,11 +1,21 @@
 {
   "providers": {
     "ollama": {
-      "enabled": true,
+      "enabled": false,
       "type": "ollama",
       "description": "Local Ollama instance",
       "base_url": "http://localhost:11434",
       "default_model": "llama3",
+      "timeout": 120,
+      "retry": 2,
+      "options": {}
+    },
+    "lmstudio": {
+      "enabled": true,
+      "type": "lmstudio",
+      "description": "LM Studio local server",
+      "base_url": "http://localhost:1234",
+      "default_model": "default",
       "timeout": 120,
       "retry": 2,
       "options": {}

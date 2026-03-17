@@ -9,6 +9,7 @@ use App\Libraries\Providers\OpenLLMProvider;
 use App\Libraries\Providers\ClaudeCodeProvider;
 use App\Libraries\Providers\ClaudeAPIProvider;
 use App\Libraries\Providers\ChatGPTProvider;
+use App\Libraries\Providers\LMStudioProvider;
 
 /**
  * Manages provider lifecycle: loading, configuring, health checking.
@@ -24,6 +25,7 @@ class ProviderManager
         'claude_code' => ClaudeCodeProvider::class,
         'claude_api' => ClaudeAPIProvider::class,
         'chatgpt' => ChatGPTProvider::class,
+        'lmstudio' => LMStudioProvider::class,
     ];
 
     public function __construct(?ConfigLoader $config = null)

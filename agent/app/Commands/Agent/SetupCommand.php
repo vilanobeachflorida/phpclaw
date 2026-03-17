@@ -286,8 +286,15 @@ class SetupCommand extends BaseCommand
             ],
             'providers' => [
                 'providers' => [
+                    'lmstudio' => [
+                        'enabled' => false, 'type' => 'lmstudio',
+                        'description' => 'LM Studio local server',
+                        'base_url' => 'http://localhost:1234',
+                        'default_model' => 'default', 'timeout' => 120, 'retry' => 2,
+                        'options' => [],
+                    ],
                     'ollama' => [
-                        'enabled' => true, 'type' => 'ollama',
+                        'enabled' => false, 'type' => 'ollama',
                         'description' => 'Local Ollama instance',
                         'base_url' => 'http://localhost:11434',
                         'default_model' => 'llama3', 'timeout' => 120, 'retry' => 2,
@@ -387,40 +394,44 @@ class SetupCommand extends BaseCommand
         $providersConfig = $config->load('providers');
 
         CLI::write('  Which provider would you like to use?', 'white');
-        CLI::write('  1) Ollama (local, recommended for getting started)');
-        CLI::write('  2) OpenAI / ChatGPT - API key');
-        CLI::write('  3) OpenAI / ChatGPT - OAuth');
-        CLI::write('  4) Claude API (Anthropic) - API key');
-        CLI::write('  5) Claude API (Anthropic) - OAuth');
-        CLI::write('  6) Claude Code (local CLI)');
-        CLI::write('  7) OpenLLM-compatible endpoint (custom URL)');
-        CLI::write('  8) Skip (configure later)');
+        CLI::write('  1) LM Studio (local, recommended)');
+        CLI::write('  2) Ollama (local)');
+        CLI::write('  3) OpenAI / ChatGPT - API key');
+        CLI::write('  4) OpenAI / ChatGPT - OAuth');
+        CLI::write('  5) Claude API (Anthropic) - API key');
+        CLI::write('  6) Claude API (Anthropic) - OAuth');
+        CLI::write('  7) Claude Code (local CLI)');
+        CLI::write('  8) OpenLLM-compatible endpoint (custom URL)');
+        CLI::write('  9) Skip (configure later)');
 
         $choice = CLI::prompt('  Select provider', '1');
 
         switch ($choice) {
             case '1':
-                $this->configureOllama($storage, $providersConfig);
+                $this->configureLMStudio($storage, $providersConfig);
                 break;
             case '2':
-                $this->configureChatGPT($storage, $providersConfig);
+                $this->configureOllama($storage, $providersConfig);
                 break;
             case '3':
-                $this->configureChatGPTOAuth($storage, $providersConfig);
+                $this->configureChatGPT($storage, $providersConfig);
                 break;
             case '4':
-                $this->configureClaudeAPI($storage, $providersConfig);
+                $this->configureChatGPTOAuth($storage, $providersConfig);
                 break;
             case '5':
-                $this->configureClaudeAPIOAuth($storage, $providersConfig);
+                $this->configureClaudeAPI($storage, $providersConfig);
                 break;
             case '6':
-                $this->configureClaudeCode($storage, $providersConfig);
+                $this->configureClaudeAPIOAuth($storage, $providersConfig);
                 break;
             case '7':
-                $this->configureOpenLLM($storage, $providersConfig);
+                $this->configureClaudeCode($storage, $providersConfig);
                 break;
             case '8':
+                $this->configureOpenLLM($storage, $providersConfig);
+                break;
+            case '9':
                 CLI::write('  Skipped. Configure providers later in writable/agent/config/providers.json', 'light_gray');
                 break;
             default:
@@ -428,6 +439,44 @@ class SetupCommand extends BaseCommand
         }
 
         CLI::newLine();
+    }
+
+    private function configureLMStudio(FileStorage $storage, array $providersConfig): void
+    {
+        $baseUrl = CLI::prompt('  LM Studio URL', 'http://localhost:1234');
+        $model = CLI::prompt('  Default model (or "default" for loaded model)', 'default');
+
+        $providersConfig['providers']['lmstudio'] = [
+            'enabled' => true, 'type' => 'lmstudio',
+            'description' => 'LM Studio local server',
+            'base_url' => $baseUrl, 'default_model' => $model,
+            'timeout' => 120, 'retry' => 2, 'options' => [],
+        ];
+        $storage->writeJson('config/providers.json', $providersConfig);
+        $this->updateDefaultProvider($storage, 'lmstudio', $model);
+
+        // Test connection
+        CLI::write('  Testing LM Studio connection...', 'yellow');
+        $ch = curl_init($baseUrl . '/v1/models');
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5, CURLOPT_CONNECTTIMEOUT => 3]);
+        $result = curl_exec($ch);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($err) {
+            CLI::write("  WARNING: Cannot reach LM Studio at {$baseUrl}", 'red');
+            CLI::write("  Make sure LM Studio is running with a model loaded.", 'yellow');
+        } else {
+            CLI::write("  LM Studio is reachable!", 'green');
+            $data = json_decode($result, true);
+            $models = $data['data'] ?? [];
+            if (!empty($models)) {
+                CLI::write('  Loaded models:');
+                foreach ($models as $m) {
+                    CLI::write("    - " . ($m['id'] ?? 'unknown'));
+                }
+            }
+        }
     }
 
     private function configureOllama(FileStorage $storage, array $providersConfig): void

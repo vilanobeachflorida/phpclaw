@@ -6,8 +6,8 @@
   "verbose": false,
   "timezone": "UTC",
   "storage_path": "writable/agent",
-  "default_provider": "ollama",
-  "default_model": "llama3",
+  "default_provider": "lmstudio",
+  "default_model": "default",
   "default_role": "reasoning",
   "default_module": "reasoning",
   "session": {
