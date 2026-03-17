@@ -172,6 +172,7 @@ class ServiceLoop
     private function writePid(): void
     {
         $pidFile = $this->storage->path('state', 'service.pid');
+        $this->storage->ensureDir(dirname($pidFile));
         file_put_contents($pidFile, (string)getmypid());
     }
 
@@ -179,6 +180,7 @@ class ServiceLoop
     {
         $line = '[' . date('c') . '] ' . $message . "\n";
         $logFile = $this->storage->path('logs', 'service.log');
+        $this->storage->ensureDir(dirname($logFile));
         file_put_contents($logFile, $line, FILE_APPEND);
     }
 }
