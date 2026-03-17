@@ -1,9 +1,7 @@
 {
-  "status": "stopped",
-  "started_at": null,
-  "last_heartbeat": null,
-  "last_maintenance": null,
-  "uptime_seconds": 0,
-  "tasks_processed": 0,
-  "errors": 0
+    "status": "stopped",
+    "started_at": null,
+    "last_heartbeat": "2026-03-17T23:32:53+00:00",
+    "iteration": 4,
+    "pid": 28160
 }
