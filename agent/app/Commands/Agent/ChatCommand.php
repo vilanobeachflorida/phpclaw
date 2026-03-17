@@ -11,16 +11,24 @@ use App\Libraries\Service\ProviderManager;
 use App\Libraries\Service\ToolRegistry;
 use App\Libraries\Router\ModelRouter;
 use App\Libraries\Memory\MemoryManager;
+use App\Libraries\Agent\AgentExecutor;
+use App\Libraries\Agent\PromptBuilder;
 
 /**
  * Interactive chat REPL - the primary user interface for PHPClaw.
- * Supports slash commands, session management, and multi-model routing.
+ *
+ * This is a real agent shell, not a dumb chat passthrough. The agent:
+ * - Has access to all registered tools (file ops, shell, http, etc.)
+ * - Parses tool calls from LLM responses and executes them
+ * - Feeds tool results back to the LLM for multi-step reasoning
+ * - Strips thinking/reasoning tags from model output
+ * - Logs all activity to session transcripts
  */
 class ChatCommand extends BaseCommand
 {
     protected $group = 'agent';
     protected $name = 'agent:chat';
-    protected $description = 'Start interactive chat session';
+    protected $description = 'Start interactive agent chat session';
     protected $usage = 'agent:chat [session_name]';
 
     private FileStorage $storage;
@@ -30,6 +38,8 @@ class ChatCommand extends BaseCommand
     private ToolRegistry $tools;
     private ModelRouter $router;
     private MemoryManager $memory;
+    private AgentExecutor $agent;
+    private PromptBuilder $promptBuilder;
     private string $currentRole = 'reasoning';
     private string $currentModule = 'reasoning';
     private bool $debugMode = false;
@@ -53,32 +63,23 @@ class ChatCommand extends BaseCommand
             $this->router->registerProvider($name, $provider);
         }
 
-        // Create or resume session
-        $sessionName = $params[0] ?? null;
-        if ($sessionName) {
-            $sessions = $this->sessions->list();
-            $found = null;
-            foreach ($sessions as $s) {
-                if ($s['name'] === $sessionName || $s['id'] === $sessionName) {
-                    $found = $s['id'];
-                    break;
-                }
-            }
-            if ($found) {
-                $session = $this->sessions->resume($found);
-                CLI::write("Resumed session: {$session['name']}", 'green');
-            } else {
-                $session = $this->sessions->create($sessionName);
-                CLI::write("Created session: {$session['name']}", 'green');
-            }
-        } else {
-            $session = $this->sessions->create();
-            CLI::write("New session: {$session['name']}", 'green');
-        }
+        // Build prompt builder
+        $this->promptBuilder = new PromptBuilder($this->tools, $this->storage);
 
-        $sessionId = $session['id'];
+        // Create or resume session
+        $sessionId = $this->initSession($params[0] ?? null);
+
         $this->currentRole = $this->config->get('app', 'default_role', 'reasoning');
         $this->currentModule = $this->config->get('app', 'default_module', 'reasoning');
+
+        // Create agent executor
+        $this->agent = new AgentExecutor(
+            $this->router,
+            $this->tools,
+            $this->debugMode,
+            $this->sessions,
+            $sessionId
+        );
 
         $this->printBanner();
         $conversationHistory = [];
@@ -114,42 +115,47 @@ class ChatCommand extends BaseCommand
 
             $conversationHistory[] = ['role' => 'user', 'content' => $input];
 
-            // Send to model
-            CLI::write('Thinking...', 'yellow');
-            $response = $this->router->chat($this->currentRole, $conversationHistory);
+            // Build system prompt with tool descriptions
+            $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule);
 
-            if ($response['success'] ?? false) {
-                $content = $response['content'] ?? '';
+            // Execute agent loop (LLM -> tools -> LLM -> ... -> final response)
+            CLI::write('', 'yellow');
+            $response = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
+
+            if ($response) {
                 CLI::newLine();
-                CLI::write($content, 'white');
+                CLI::write($response, 'white');
                 CLI::newLine();
+            }
 
-                $conversationHistory[] = ['role' => 'assistant', 'content' => $content];
-
-                // Log assistant message
-                $this->sessions->appendTranscript($sessionId, [
-                    'event_type' => 'assistant_message',
-                    'role' => 'assistant',
-                    'content' => $content,
-                    'provider' => $response['provider'] ?? $route['provider'],
-                    'model' => $response['model'] ?? $route['model'],
-                    'module' => $this->currentModule,
-                ]);
-
-                if ($this->debugMode) {
-                    CLI::write('[Debug] Provider: ' . ($response['provider'] ?? 'unknown') . ' Model: ' . ($response['model'] ?? 'unknown'), 'dark_gray');
-                }
-            } else {
-                CLI::error('Error: ' . ($response['error'] ?? 'Unknown error'));
-                $this->sessions->appendTranscript($sessionId, [
-                    'event_type' => 'system_notice',
-                    'role' => 'system',
-                    'content' => 'Error: ' . ($response['error'] ?? 'Unknown error'),
-                ]);
+            if ($this->debugMode) {
+                CLI::write('[Debug] Role: ' . $this->currentRole . ' Provider: ' . $route['provider'] . ' Model: ' . $route['model'], 'dark_gray');
+                CLI::write('[Debug] History: ' . count($conversationHistory) . ' messages', 'dark_gray');
             }
         }
 
         CLI::write('Session saved. Goodbye!', 'green');
+    }
+
+    private function initSession(?string $sessionName): string
+    {
+        if ($sessionName) {
+            $sessions = $this->sessions->list();
+            foreach ($sessions as $s) {
+                if ($s['name'] === $sessionName || $s['id'] === $sessionName) {
+                    $session = $this->sessions->resume($s['id']);
+                    CLI::write("Resumed session: {$session['name']}", 'green');
+                    return $session['id'];
+                }
+            }
+            $session = $this->sessions->create($sessionName);
+            CLI::write("Created session: {$session['name']}", 'green');
+            return $session['id'];
+        }
+
+        $session = $this->sessions->create();
+        CLI::write("New session: {$session['name']}", 'green');
+        return $session['id'];
     }
 
     private function handleSlashCommand(string $input, string $sessionId): ?string
@@ -201,6 +207,7 @@ class ChatCommand extends BaseCommand
                 break;
             case '/debug':
                 $this->debugMode = !$this->debugMode;
+                $this->agent->setDebug($this->debugMode);
                 CLI::write('Debug mode: ' . ($this->debugMode ? 'ON' : 'OFF'), 'yellow');
                 break;
             case '/save':
@@ -219,6 +226,7 @@ class ChatCommand extends BaseCommand
         CLI::write('  PHPClaw Agent Shell v0.1.0', 'green');
         CLI::write('================================', 'green');
         CLI::write('Type /help for commands, /exit to quit.', 'light_gray');
+        CLI::write('Tools: ' . count($this->tools->all()) . ' loaded', 'light_gray');
         CLI::newLine();
     }
 
