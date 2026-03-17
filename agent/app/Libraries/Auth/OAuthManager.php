@@ -1,0 +1,413 @@
+<?php
+
+namespace App\Libraries\Auth;
+
+use App\Libraries\Storage\FileStorage;
+
+/**
+ * Manages OAuth tokens for providers.
+ * Stores tokens in files, handles refresh, supports Authorization Code with PKCE
+ * (localhost redirect) and Device Authorization Grant flows.
+ *
+ * Token storage: writable/agent/config/oauth/<provider>.json
+ */
+class OAuthManager
+{
+    private FileStorage $storage;
+
+    /** Known OAuth endpoints for supported providers. */
+    private static array $providerEndpoints = [
+        'chatgpt' => [
+            'authorize_url' => 'https://auth.openai.com/authorize',
+            'token_url' => 'https://auth.openai.com/oauth/token',
+            'device_url' => null, // OpenAI doesn't support device flow yet
+            'scopes' => 'openid profile email',
+            'audience' => 'https://api.openai.com/v1',
+        ],
+        'claude' => [
+            'authorize_url' => 'https://console.anthropic.com/oauth/authorize',
+            'token_url' => 'https://console.anthropic.com/oauth/token',
+            'device_url' => null,
+            'scopes' => '',
+            'audience' => '',
+        ],
+    ];
+
+    public function __construct(?FileStorage $storage = null)
+    {
+        $this->storage = $storage ?? new FileStorage();
+        $this->storage->ensureDir($this->storage->path('config', 'oauth'));
+    }
+
+    /**
+     * Get a valid access token for a provider. Returns null if no token or expired without refresh.
+     */
+    public function getAccessToken(string $provider): ?string
+    {
+        $token = $this->loadToken($provider);
+        if (!$token) {
+            return null;
+        }
+
+        // Check expiration
+        if ($this->isExpired($token)) {
+            // Try refresh
+            if (!empty($token['refresh_token'])) {
+                $refreshed = $this->refreshToken($provider, $token);
+                if ($refreshed) {
+                    return $refreshed['access_token'];
+                }
+            }
+            return null;
+        }
+
+        return $token['access_token'] ?? null;
+    }
+
+    /**
+     * Check if a provider has a stored token (expired or not).
+     */
+    public function hasToken(string $provider): bool
+    {
+        return $this->loadToken($provider) !== null;
+    }
+
+    /**
+     * Check if a provider's token is valid (exists and not expired).
+     */
+    public function isValid(string $provider): bool
+    {
+        $token = $this->loadToken($provider);
+        if (!$token) return false;
+        if ($this->isExpired($token)) {
+            // Try refresh silently
+            if (!empty($token['refresh_token'])) {
+                return $this->refreshToken($provider, $token) !== null;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Store a token for a provider.
+     */
+    public function storeToken(string $provider, array $tokenData): bool
+    {
+        $token = [
+            'provider' => $provider,
+            'access_token' => $tokenData['access_token'] ?? null,
+            'refresh_token' => $tokenData['refresh_token'] ?? null,
+            'token_type' => $tokenData['token_type'] ?? 'Bearer',
+            'expires_in' => $tokenData['expires_in'] ?? null,
+            'expires_at' => null,
+            'scope' => $tokenData['scope'] ?? null,
+            'id_token' => $tokenData['id_token'] ?? null,
+            'stored_at' => date('c'),
+            'auth_method' => $tokenData['auth_method'] ?? 'manual',
+        ];
+
+        // Calculate absolute expiration time
+        if ($token['expires_in']) {
+            $token['expires_at'] = time() + (int)$token['expires_in'];
+        }
+
+        return $this->storage->writeJson("config/oauth/{$provider}.json", $token);
+    }
+
+    /**
+     * Store a manually-provided token (paste from browser, external tool, etc.).
+     */
+    public function storeManualToken(string $provider, string $accessToken, string $refreshToken = null, int $expiresIn = null): bool
+    {
+        return $this->storeToken($provider, [
+            'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
+            'expires_in' => $expiresIn,
+            'auth_method' => 'manual',
+        ]);
+    }
+
+    /**
+     * Remove stored token for a provider.
+     */
+    public function revokeToken(string $provider): bool
+    {
+        $path = $this->storage->path('config', 'oauth', "{$provider}.json");
+        if (file_exists($path)) {
+            return unlink($path);
+        }
+        return false;
+    }
+
+    /**
+     * Get token info for display (masks sensitive values).
+     */
+    public function getTokenInfo(string $provider): ?array
+    {
+        $token = $this->loadToken($provider);
+        if (!$token) return null;
+
+        return [
+            'provider' => $provider,
+            'has_access_token' => !empty($token['access_token']),
+            'has_refresh_token' => !empty($token['refresh_token']),
+            'token_preview' => $this->maskToken($token['access_token'] ?? ''),
+            'token_type' => $token['token_type'] ?? 'Bearer',
+            'expires_at' => $token['expires_at'] ? date('c', $token['expires_at']) : null,
+            'expired' => $this->isExpired($token),
+            'stored_at' => $token['stored_at'] ?? null,
+            'auth_method' => $token['auth_method'] ?? 'unknown',
+        ];
+    }
+
+    /**
+     * List all stored OAuth tokens.
+     */
+    public function listTokens(): array
+    {
+        $dir = $this->storage->path('config', 'oauth');
+        $tokens = [];
+        $files = glob($dir . '/*.json');
+        foreach ($files as $file) {
+            $provider = basename($file, '.json');
+            $info = $this->getTokenInfo($provider);
+            if ($info) {
+                $tokens[] = $info;
+            }
+        }
+        return $tokens;
+    }
+
+    // ---- Authorization Code with PKCE (localhost redirect) ----
+
+    /**
+     * Generate PKCE challenge for Authorization Code flow.
+     */
+    public function generatePKCE(): array
+    {
+        $verifier = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+
+        return [
+            'code_verifier' => $verifier,
+            'code_challenge' => $challenge,
+            'code_challenge_method' => 'S256',
+        ];
+    }
+
+    /**
+     * Build the authorization URL for the Authorization Code flow.
+     */
+    public function buildAuthUrl(string $provider, array $oauthConfig, array $pkce, string $redirectUri, string $state): string
+    {
+        $endpoints = $this->getEndpoints($provider, $oauthConfig);
+
+        $params = [
+            'response_type' => 'code',
+            'client_id' => $oauthConfig['client_id'],
+            'redirect_uri' => $redirectUri,
+            'state' => $state,
+            'code_challenge' => $pkce['code_challenge'],
+            'code_challenge_method' => $pkce['code_challenge_method'],
+        ];
+
+        if (!empty($endpoints['scopes'])) {
+            $params['scope'] = $endpoints['scopes'];
+        }
+        if (!empty($endpoints['audience'])) {
+            $params['audience'] = $endpoints['audience'];
+        }
+
+        return $endpoints['authorize_url'] . '?' . http_build_query($params);
+    }
+
+    /**
+     * Exchange authorization code for tokens.
+     */
+    public function exchangeCode(string $provider, array $oauthConfig, string $code, string $codeVerifier, string $redirectUri): ?array
+    {
+        $endpoints = $this->getEndpoints($provider, $oauthConfig);
+
+        $payload = [
+            'grant_type' => 'authorization_code',
+            'client_id' => $oauthConfig['client_id'],
+            'code' => $code,
+            'redirect_uri' => $redirectUri,
+            'code_verifier' => $codeVerifier,
+        ];
+
+        if (!empty($oauthConfig['client_secret'])) {
+            $payload['client_secret'] = $oauthConfig['client_secret'];
+        }
+
+        $result = $this->httpPost($endpoints['token_url'], $payload);
+        if ($result && !empty($result['access_token'])) {
+            $result['auth_method'] = 'authorization_code';
+            $this->storeToken($provider, $result);
+            return $result;
+        }
+
+        return null;
+    }
+
+    // ---- Device Authorization Grant ----
+
+    /**
+     * Start device authorization flow.
+     */
+    public function startDeviceAuth(string $provider, array $oauthConfig): ?array
+    {
+        $endpoints = $this->getEndpoints($provider, $oauthConfig);
+        $deviceUrl = $endpoints['device_url'] ?? null;
+
+        if (!$deviceUrl) {
+            return null; // Provider doesn't support device flow
+        }
+
+        $payload = [
+            'client_id' => $oauthConfig['client_id'],
+        ];
+
+        if (!empty($endpoints['scopes'])) {
+            $payload['scope'] = $endpoints['scopes'];
+        }
+        if (!empty($endpoints['audience'])) {
+            $payload['audience'] = $endpoints['audience'];
+        }
+
+        return $this->httpPost($deviceUrl, $payload);
+    }
+
+    /**
+     * Poll for device authorization completion.
+     */
+    public function pollDeviceAuth(string $provider, array $oauthConfig, string $deviceCode): ?array
+    {
+        $endpoints = $this->getEndpoints($provider, $oauthConfig);
+
+        $payload = [
+            'grant_type' => 'urn:ietf:params:oauth:grant-type:device_code',
+            'client_id' => $oauthConfig['client_id'],
+            'device_code' => $deviceCode,
+        ];
+
+        $result = $this->httpPost($endpoints['token_url'], $payload);
+        if ($result && !empty($result['access_token'])) {
+            $result['auth_method'] = 'device_code';
+            $this->storeToken($provider, $result);
+            return $result;
+        }
+
+        return $result; // May contain 'error' => 'authorization_pending'
+    }
+
+    // ---- Internal helpers ----
+
+    private function loadToken(string $provider): ?array
+    {
+        return $this->storage->readJson("config/oauth/{$provider}.json");
+    }
+
+    private function isExpired(array $token): bool
+    {
+        if (empty($token['expires_at'])) {
+            return false; // No expiration = assume valid
+        }
+        return time() >= $token['expires_at'];
+    }
+
+    /**
+     * Refresh an expired access token using the refresh token.
+     */
+    private function refreshToken(string $provider, array $token): ?array
+    {
+        // Load provider OAuth config
+        $storage = $this->storage;
+        $providersConfig = $storage->readJson('config/providers.json') ?? [];
+        $providerConfig = $providersConfig['providers'][$provider] ?? [];
+        $oauthConfig = $providerConfig['oauth'] ?? [];
+
+        if (empty($oauthConfig['client_id'])) {
+            return null; // Can't refresh without client_id
+        }
+
+        $endpoints = $this->getEndpoints($provider, $oauthConfig);
+
+        $payload = [
+            'grant_type' => 'refresh_token',
+            'client_id' => $oauthConfig['client_id'],
+            'refresh_token' => $token['refresh_token'],
+        ];
+
+        if (!empty($oauthConfig['client_secret'])) {
+            $payload['client_secret'] = $oauthConfig['client_secret'];
+        }
+
+        $result = $this->httpPost($endpoints['token_url'], $payload);
+        if ($result && !empty($result['access_token'])) {
+            // Preserve refresh token if not returned
+            if (empty($result['refresh_token'])) {
+                $result['refresh_token'] = $token['refresh_token'];
+            }
+            $result['auth_method'] = $token['auth_method'] ?? 'refresh';
+            $this->storeToken($provider, $result);
+            return $result;
+        }
+
+        return null;
+    }
+
+    /**
+     * Get OAuth endpoints for a provider, merging defaults with config overrides.
+     */
+    private function getEndpoints(string $provider, array $oauthConfig): array
+    {
+        $defaults = self::$providerEndpoints[$provider] ?? [
+            'authorize_url' => '',
+            'token_url' => '',
+            'device_url' => null,
+            'scopes' => '',
+            'audience' => '',
+        ];
+
+        return [
+            'authorize_url' => $oauthConfig['authorize_url'] ?? $defaults['authorize_url'],
+            'token_url' => $oauthConfig['token_url'] ?? $defaults['token_url'],
+            'device_url' => $oauthConfig['device_url'] ?? $defaults['device_url'],
+            'scopes' => $oauthConfig['scopes'] ?? $defaults['scopes'],
+            'audience' => $oauthConfig['audience'] ?? $defaults['audience'],
+        ];
+    }
+
+    private function maskToken(string $token): string
+    {
+        if (strlen($token) <= 8) {
+            return '****';
+        }
+        return substr($token, 0, 4) . '...' . substr($token, -4);
+    }
+
+    private function httpPost(string $url, array $data): ?array
+    {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => http_build_query($data),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            return null;
+        }
+
+        return json_decode($response, true);
+    }
+}

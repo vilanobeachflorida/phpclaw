@@ -7,6 +7,7 @@ use App\Libraries\Providers\ProviderInterface;
 use App\Libraries\Providers\OllamaProvider;
 use App\Libraries\Providers\OpenLLMProvider;
 use App\Libraries\Providers\ClaudeCodeProvider;
+use App\Libraries\Providers\ClaudeAPIProvider;
 use App\Libraries\Providers\ChatGPTProvider;
 
 /**
@@ -21,6 +22,7 @@ class ProviderManager
         'ollama' => OllamaProvider::class,
         'openllm' => OpenLLMProvider::class,
         'claude_code' => ClaudeCodeProvider::class,
+        'claude_api' => ClaudeAPIProvider::class,
         'chatgpt' => ChatGPTProvider::class,
     ];
 

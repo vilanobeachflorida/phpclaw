@@ -4,8 +4,20 @@ namespace App\Libraries\Providers;
 
 /**
  * Provider adapter for ChatGPT / OpenAI API.
- * Supports injected API keys or tokens.
- * For OAuth-based access, supply credentials externally and configure via providers.json.
+ * Supports both API key and OAuth authentication.
+ *
+ * Auth priority: OAuth token -> API key from env -> API key from config
+ *
+ * To enable OAuth, add to providers.json:
+ *   "chatgpt": {
+ *     "oauth": {
+ *       "enabled": true,
+ *       "client_id": "your-client-id",
+ *       "client_secret": "your-client-secret"
+ *     }
+ *   }
+ *
+ * Then run: php spark agent:auth login chatgpt
  */
 class ChatGPTProvider extends BaseProvider
 {
@@ -20,6 +32,11 @@ class ChatGPTProvider extends BaseProvider
             'default_model' => 'gpt-4',
             'timeout' => 120,
             'options' => [],
+            'oauth' => [
+                'enabled' => false,
+                'client_id' => '',
+                'client_secret' => '',
+            ],
         ];
     }
 
@@ -30,35 +47,36 @@ class ChatGPTProvider extends BaseProvider
             'streaming' => true,
             'system_prompt' => true,
             'model_list' => true,
+            'oauth' => true,
         ];
     }
 
     public function healthCheck(): array
     {
-        $apiKey = $this->resolveApiKey();
-        if (!$apiKey) {
-            return ['status' => 'error', 'provider' => $this->name, 'message' => 'No API key configured'];
+        $token = $this->resolveToken();
+        if (!$token) {
+            return ['status' => 'error', 'provider' => $this->name, 'message' => 'No credentials configured (API key or OAuth)', 'auth_method' => 'none'];
         }
 
         $result = $this->httpRequest('GET', rtrim($this->config['base_url'], '/') . '/models', [
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $token,
         ], null, 10);
 
         if ($result['success']) {
-            return ['status' => 'ok', 'provider' => $this->name];
+            return ['status' => 'ok', 'provider' => $this->name, 'auth_method' => $this->getAuthMethod()];
         }
         return ['status' => 'error', 'provider' => $this->name, 'message' => $result['error'] ?? 'Connection failed'];
     }
 
     public function listModels(): array
     {
-        $apiKey = $this->resolveApiKey();
-        if (!$apiKey) {
+        $token = $this->resolveToken();
+        if (!$token) {
             return [];
         }
 
         $result = $this->httpRequest('GET', rtrim($this->config['base_url'], '/') . '/models', [
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $token,
         ]);
 
         if (!$result['success'] || !isset($result['decoded']['data'])) {
@@ -73,9 +91,9 @@ class ChatGPTProvider extends BaseProvider
 
     public function chat(array $messages, array $options = []): array
     {
-        $apiKey = $this->resolveApiKey();
-        if (!$apiKey) {
-            return $this->errorResponse('No API key configured for ChatGPT');
+        $token = $this->resolveToken();
+        if (!$token) {
+            return $this->errorResponse('No credentials configured for ChatGPT (API key or OAuth)');
         }
 
         $model = $options['model'] ?? $this->config['default_model'];
@@ -90,13 +108,17 @@ class ChatGPTProvider extends BaseProvider
             rtrim($this->config['base_url'], '/') . '/chat/completions',
             [
                 'Content-Type: application/json',
-                'Authorization: Bearer ' . $apiKey,
+                'Authorization: Bearer ' . $token,
             ],
             $payload,
             $this->config['timeout']
         );
 
         if (!$result['success']) {
+            // If OAuth token expired, hint at re-auth
+            if (($result['http_code'] ?? 0) === 401 && $this->getAuthMethod() === 'oauth') {
+                return $this->errorResponse('OAuth token expired. Run: php spark agent:auth login chatgpt', 401);
+            }
             return $this->errorResponse($result['error'] ?? 'ChatGPT request failed', $result['http_code'] ?? 0);
         }
 
@@ -107,6 +129,7 @@ class ChatGPTProvider extends BaseProvider
             'model' => $data['model'] ?? $model,
             'usage' => $data['usage'] ?? null,
             'finish_reason' => $data['choices'][0]['finish_reason'] ?? null,
+            'auth_method' => $this->getAuthMethod(),
         ]);
     }
 }

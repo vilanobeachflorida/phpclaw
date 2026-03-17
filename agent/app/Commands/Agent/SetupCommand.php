@@ -308,10 +308,20 @@ class SetupCommand extends BaseCommand
                     ],
                     'chatgpt' => [
                         'enabled' => false, 'type' => 'chatgpt',
-                        'description' => 'ChatGPT via OpenAI API',
+                        'description' => 'ChatGPT via OpenAI API (key or OAuth)',
                         'base_url' => 'https://api.openai.com/v1',
                         'api_key_env' => 'OPENAI_API_KEY',
                         'default_model' => 'gpt-4', 'timeout' => 120, 'retry' => 2, 'options' => [],
+                        'oauth' => ['enabled' => false, 'client_id' => '', 'client_secret' => ''],
+                    ],
+                    'claude_api' => [
+                        'enabled' => false, 'type' => 'claude_api',
+                        'description' => 'Claude via Anthropic API (key or OAuth)',
+                        'base_url' => 'https://api.anthropic.com',
+                        'api_key_env' => 'ANTHROPIC_API_KEY',
+                        'default_model' => 'claude-sonnet-4-20250514', 'api_version' => '2023-06-01',
+                        'max_tokens' => 4096, 'timeout' => 180, 'retry' => 2, 'options' => [],
+                        'oauth' => ['enabled' => false, 'client_id' => '', 'client_secret' => ''],
                     ],
                 ],
             ],
@@ -378,10 +388,13 @@ class SetupCommand extends BaseCommand
 
         CLI::write('  Which provider would you like to use?', 'white');
         CLI::write('  1) Ollama (local, recommended for getting started)');
-        CLI::write('  2) OpenAI / ChatGPT (requires API key)');
-        CLI::write('  3) Claude Code (requires claude CLI installed)');
-        CLI::write('  4) OpenLLM-compatible endpoint (custom URL)');
-        CLI::write('  5) Skip (configure later)');
+        CLI::write('  2) OpenAI / ChatGPT - API key');
+        CLI::write('  3) OpenAI / ChatGPT - OAuth');
+        CLI::write('  4) Claude API (Anthropic) - API key');
+        CLI::write('  5) Claude API (Anthropic) - OAuth');
+        CLI::write('  6) Claude Code (local CLI)');
+        CLI::write('  7) OpenLLM-compatible endpoint (custom URL)');
+        CLI::write('  8) Skip (configure later)');
 
         $choice = CLI::prompt('  Select provider', '1');
 
@@ -393,12 +406,21 @@ class SetupCommand extends BaseCommand
                 $this->configureChatGPT($storage, $providersConfig);
                 break;
             case '3':
-                $this->configureClaudeCode($storage, $providersConfig);
+                $this->configureChatGPTOAuth($storage, $providersConfig);
                 break;
             case '4':
-                $this->configureOpenLLM($storage, $providersConfig);
+                $this->configureClaudeAPI($storage, $providersConfig);
                 break;
             case '5':
+                $this->configureClaudeAPIOAuth($storage, $providersConfig);
+                break;
+            case '6':
+                $this->configureClaudeCode($storage, $providersConfig);
+                break;
+            case '7':
+                $this->configureOpenLLM($storage, $providersConfig);
+                break;
+            case '8':
                 CLI::write('  Skipped. Configure providers later in writable/agent/config/providers.json', 'light_gray');
                 break;
             default:
@@ -464,6 +486,79 @@ class SetupCommand extends BaseCommand
 
         $this->updateDefaultProvider($storage, 'chatgpt', $model);
         CLI::write('  ChatGPT configured.', 'green');
+    }
+
+    private function configureChatGPTOAuth(FileStorage $storage, array $providersConfig): void
+    {
+        CLI::write('  Setting up ChatGPT with OAuth...', 'cyan');
+        CLI::newLine();
+        CLI::write('  You need an OAuth client ID from OpenAI.', 'light_gray');
+        CLI::write('  See: https://platform.openai.com/docs/guides/oauth', 'light_gray');
+        CLI::newLine();
+
+        $clientId = CLI::prompt('  OAuth Client ID');
+        $clientSecret = CLI::prompt('  OAuth Client Secret (optional, press Enter to skip)');
+        $model = CLI::prompt('  Default model', 'gpt-4');
+
+        $providersConfig['providers']['chatgpt']['enabled'] = true;
+        $providersConfig['providers']['chatgpt']['default_model'] = $model;
+        $providersConfig['providers']['chatgpt']['oauth'] = [
+            'enabled' => true,
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret ?: '',
+        ];
+        $storage->writeJson('config/providers.json', $providersConfig);
+
+        $this->updateDefaultProvider($storage, 'chatgpt', $model);
+        CLI::write('  ChatGPT OAuth configured.', 'green');
+        CLI::write('  Run `php spark agent:auth login chatgpt` to complete login.', 'yellow');
+    }
+
+    private function configureClaudeAPI(FileStorage $storage, array $providersConfig): void
+    {
+        $apiKey = CLI::prompt('  Anthropic API key (or env var name)');
+        $model = CLI::prompt('  Default model', 'claude-sonnet-4-20250514');
+
+        if (str_starts_with($apiKey, 'sk-ant-')) {
+            CLI::write('  TIP: Store API keys in .env instead of config files.', 'yellow');
+            CLI::write('  Add ANTHROPIC_API_KEY=' . $apiKey . ' to your .env file.', 'yellow');
+            $providersConfig['providers']['claude_api']['api_key_env'] = 'ANTHROPIC_API_KEY';
+        } else {
+            $providersConfig['providers']['claude_api']['api_key_env'] = $apiKey ?: 'ANTHROPIC_API_KEY';
+        }
+
+        $providersConfig['providers']['claude_api']['enabled'] = true;
+        $providersConfig['providers']['claude_api']['default_model'] = $model;
+        $storage->writeJson('config/providers.json', $providersConfig);
+
+        $this->updateDefaultProvider($storage, 'claude_api', $model);
+        CLI::write('  Claude API configured.', 'green');
+    }
+
+    private function configureClaudeAPIOAuth(FileStorage $storage, array $providersConfig): void
+    {
+        CLI::write('  Setting up Claude API with OAuth...', 'cyan');
+        CLI::newLine();
+        CLI::write('  You need an OAuth client ID from Anthropic.', 'light_gray');
+        CLI::write('  See: https://docs.anthropic.com/en/docs/oauth', 'light_gray');
+        CLI::newLine();
+
+        $clientId = CLI::prompt('  OAuth Client ID');
+        $clientSecret = CLI::prompt('  OAuth Client Secret (optional, press Enter to skip)');
+        $model = CLI::prompt('  Default model', 'claude-sonnet-4-20250514');
+
+        $providersConfig['providers']['claude_api']['enabled'] = true;
+        $providersConfig['providers']['claude_api']['default_model'] = $model;
+        $providersConfig['providers']['claude_api']['oauth'] = [
+            'enabled' => true,
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret ?: '',
+        ];
+        $storage->writeJson('config/providers.json', $providersConfig);
+
+        $this->updateDefaultProvider($storage, 'claude_api', $model);
+        CLI::write('  Claude API OAuth configured.', 'green');
+        CLI::write('  Run `php spark agent:auth login claude_api` to complete login.', 'yellow');
     }
 
     private function configureClaudeCode(FileStorage $storage, array $providersConfig): void

@@ -34,13 +34,36 @@
     "chatgpt": {
       "enabled": false,
       "type": "chatgpt",
-      "description": "ChatGPT via OAuth/API",
+      "description": "ChatGPT via OpenAI API (key or OAuth)",
       "base_url": "https://api.openai.com/v1",
       "api_key_env": "OPENAI_API_KEY",
       "default_model": "gpt-4",
       "timeout": 120,
       "retry": 2,
-      "options": {}
+      "options": {},
+      "oauth": {
+        "enabled": false,
+        "client_id": "",
+        "client_secret": ""
+      }
+    },
+    "claude_api": {
+      "enabled": false,
+      "type": "claude_api",
+      "description": "Claude via Anthropic API (key or OAuth)",
+      "base_url": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "default_model": "claude-sonnet-4-20250514",
+      "api_version": "2023-06-01",
+      "max_tokens": 4096,
+      "timeout": 180,
+      "retry": 2,
+      "options": {},
+      "oauth": {
+        "enabled": false,
+        "client_id": "",
+        "client_secret": ""
+      }
     }
   }
 }

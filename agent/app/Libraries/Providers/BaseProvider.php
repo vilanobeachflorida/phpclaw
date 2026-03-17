@@ -109,6 +109,41 @@ abstract class BaseProvider implements ProviderInterface
     }
 
     /**
+     * Resolve bearer token: try OAuth token first, then fall back to API key.
+     */
+    protected function resolveToken(): ?string
+    {
+        // Try OAuth token first
+        if (!empty($this->config['oauth']['enabled'])) {
+            $oauth = new \App\Libraries\Auth\OAuthManager();
+            $token = $oauth->getAccessToken($this->name);
+            if ($token) {
+                return $token;
+            }
+        }
+
+        // Fall back to API key
+        return $this->resolveApiKey();
+    }
+
+    /**
+     * Get auth method in use: 'oauth', 'api_key', or 'none'.
+     */
+    protected function getAuthMethod(): string
+    {
+        if (!empty($this->config['oauth']['enabled'])) {
+            $oauth = new \App\Libraries\Auth\OAuthManager();
+            if ($oauth->isValid($this->name)) {
+                return 'oauth';
+            }
+        }
+        if ($this->resolveApiKey()) {
+            return 'api_key';
+        }
+        return 'none';
+    }
+
+    /**
      * Make an HTTP request using cURL.
      */
     protected function httpRequest(string $method, string $url, array $headers = [], $body = null, int $timeout = 30): array
