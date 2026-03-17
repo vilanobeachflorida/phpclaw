@@ -13,12 +13,12 @@ use CodeIgniter\CLI\CLI;
  * executes tools, feeds results back, and loops until the model
  * produces a final response with no tool calls.
  *
- * Instead of a hard iteration cap, uses smart loop detection:
- * - Tracks total tool calls across all iterations
- * - Detects repeated identical tool calls (stuck in a loop)
- * - Detects consecutive failures (model can't make progress)
- * - Nudges the model to wrap up after many iterations
- * - Only hard-stops at a very high safety limit (50 iterations)
+ * There is no iteration limit. The agent runs until:
+ * - The model responds with no tool calls (task complete)
+ * - The model is stuck making identical calls repeatedly
+ * - The model can't make progress (consecutive failures)
+ *
+ * If stuck, the agent asks the user what to do rather than silently stopping.
  */
 class AgentExecutor
 {
@@ -29,16 +29,10 @@ class AgentExecutor
     private ?string $sessionId;
     private bool $debug;
 
-    /** Absolute safety limit - should never realistically hit this. */
-    private int $hardLimit = 50;
-
-    /** After this many iterations, nudge the model to wrap up. */
-    private int $nudgeAfter = 15;
-
-    /** Max consecutive identical tool call sets before declaring stuck. */
+    /** Identical call sets this many times in a row = stuck. */
     private int $maxRepeats = 3;
 
-    /** Max consecutive all-failed iterations before stopping. */
+    /** All tools failing this many iterations in a row = stuck. */
     private int $maxConsecutiveFailures = 3;
 
     public function __construct(
@@ -80,7 +74,7 @@ class AgentExecutor
         $consecutiveFailures = 0;
         $repeatCount = 0;
 
-        while ($iteration < $this->hardLimit) {
+        while (true) {
             $iteration++;
 
             // Build messages with system prompt
@@ -88,13 +82,6 @@ class AgentExecutor
                 [['role' => 'system', 'content' => $systemPrompt]],
                 $conversationHistory
             );
-
-            // After many iterations, nudge the model to finish up
-            if ($iteration === $this->nudgeAfter + 1) {
-                $messages[] = ['role' => 'system', 'content' =>
-                    'You have been running tools for many iterations. Please finish up: summarize what you have so far and provide your final response to the user. Only make more tool calls if absolutely necessary to complete the task.'
-                ];
-            }
 
             if ($this->debug) {
                 CLI::write("[Agent] Iteration {$iteration}, {$totalToolCalls} total tool calls, " . count($messages) . " messages", 'dark_gray');
@@ -126,7 +113,7 @@ class AgentExecutor
                 }
             }
 
-            // If no tool calls, we're done
+            // If no tool calls, the model is done
             if (!$parsed['has_tool_calls']) {
                 $finalText = implode("\n\n", $allDisplayText);
                 $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
@@ -138,18 +125,21 @@ class AgentExecutor
                 return $finalText;
             }
 
-            // --- Loop detection ---
+            // --- Stuck detection ---
 
-            // Build a signature of this iteration's tool calls
+            // Check for repeated identical tool calls
             $callSig = $this->buildCallSignature($parsed['tool_calls']);
-
-            // Check for repeated identical calls
             if (!empty($previousCallSignatures) && end($previousCallSignatures) === $callSig) {
                 $repeatCount++;
                 if ($repeatCount >= $this->maxRepeats) {
-                    CLI::write("  [Agent] Detected repeated tool calls - breaking loop", 'yellow');
-                    $allDisplayText[] = "(Stopped: agent was repeating the same tool calls)";
-                    break;
+                    $stuckResult = $this->handleStuck('repeating the same tool calls', $allDisplayText, $conversationHistory);
+                    if ($stuckResult !== null) {
+                        return $stuckResult;
+                    }
+                    // User said continue - reset detection
+                    $repeatCount = 0;
+                    $previousCallSignatures = [];
+                    continue;
                 }
             } else {
                 $repeatCount = 0;
@@ -160,7 +150,7 @@ class AgentExecutor
             $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
             $totalToolCalls += count($toolResults);
 
-            // Check for all-failed iterations
+            // Check for consecutive all-failed iterations
             $allFailed = true;
             foreach ($toolResults as $r) {
                 if ($r['result']['success'] ?? false) {
@@ -172,33 +162,54 @@ class AgentExecutor
             if ($allFailed) {
                 $consecutiveFailures++;
                 if ($consecutiveFailures >= $this->maxConsecutiveFailures) {
-                    CLI::write("  [Agent] Too many consecutive tool failures - stopping", 'yellow');
-                    $allDisplayText[] = "(Stopped: tools failing repeatedly)";
-                    break;
+                    $stuckResult = $this->handleStuck('tools are failing repeatedly', $allDisplayText, $conversationHistory);
+                    if ($stuckResult !== null) {
+                        return $stuckResult;
+                    }
+                    // User said continue
+                    $consecutiveFailures = 0;
+                    continue;
                 }
             } else {
                 $consecutiveFailures = 0;
             }
 
-            // Add assistant message + tool results to conversation history
+            // Feed results back to the model
             $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
-
-            $resultMessage = $this->formatToolResults($toolResults, $iteration, $totalToolCalls);
+            $resultMessage = $this->formatToolResults($toolResults);
             $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
         }
+    }
 
-        // Reached a break or hard limit
-        $finalText = implode("\n\n", $allDisplayText);
-        if (empty($finalText)) {
-            $finalText = "(Agent could not complete the task)";
+    /**
+     * When the agent appears stuck, ask the user what to do.
+     * Returns null if user wants to continue, or the final text to return.
+     */
+    private function handleStuck(string $reason, array &$allDisplayText, array &$conversationHistory): ?string
+    {
+        CLI::newLine();
+        CLI::write("Agent appears stuck: {$reason}", 'yellow');
+        $choice = CLI::prompt('  (c)ontinue, (s)top, or give new (i)nstructions?', 'c');
+
+        switch (strtolower(substr($choice, 0, 1))) {
+            case 's':
+                $finalText = implode("\n\n", $allDisplayText);
+                if (empty($finalText)) {
+                    $finalText = "(Stopped by user)";
+                }
+                $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
+                return $finalText;
+
+            case 'i':
+                $instruction = CLI::prompt('  Enter instructions');
+                if ($instruction) {
+                    $conversationHistory[] = ['role' => 'user', 'content' => $instruction];
+                }
+                return null; // Continue with new instructions
+
+            default:
+                return null; // Continue
         }
-        $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
-
-        if ($this->debug) {
-            CLI::write("[Agent] Stopped after {$iteration} iterations, {$totalToolCalls} tool calls", 'dark_gray');
-        }
-
-        return $finalText;
     }
 
     /**
@@ -244,9 +255,9 @@ class AgentExecutor
     /**
      * Format tool results into a message the model can understand.
      */
-    private function formatToolResults(array $results, int $iteration, int $totalCalls): string
+    private function formatToolResults(array $results): string
     {
-        $parts = ["[Tool Results - iteration {$iteration}, {$totalCalls} total calls]"];
+        $parts = ["[Tool Results]"];
 
         foreach ($results as $r) {
             $toolName = $r['tool'];
@@ -266,7 +277,7 @@ class AgentExecutor
             }
         }
 
-        $parts[] = "\nContinue working on the user's request. Call more tools if needed, or provide your final response.";
+        $parts[] = "\nContinue working on the user's request. Call more tools if needed, or provide your final response when done.";
 
         return implode("\n\n", $parts);
     }
@@ -284,9 +295,6 @@ class AgentExecutor
         return md5(implode('|', $sigs));
     }
 
-    /**
-     * Log a transcript event if session is active.
-     */
     private function logTranscript(string $type, string $role, string $content, array $response = []): void
     {
         if (!$this->sessions || !$this->sessionId) return;
@@ -300,9 +308,6 @@ class AgentExecutor
         ]);
     }
 
-    /**
-     * Log a tool execution event.
-     */
     private function logToolEvent(string $tool, array $args, array $result, array $response): void
     {
         if (!$this->sessions || !$this->sessionId) return;
