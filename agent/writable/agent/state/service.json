@@ -1,0 +1,9 @@
+{
+  "status": "stopped",
+  "started_at": null,
+  "last_heartbeat": null,
+  "last_maintenance": null,
+  "uptime_seconds": 0,
+  "tasks_processed": 0,
+  "errors": 0
+}

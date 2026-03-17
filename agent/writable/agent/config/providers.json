@@ -1,0 +1,46 @@
+{
+  "providers": {
+    "ollama": {
+      "enabled": true,
+      "type": "ollama",
+      "description": "Local Ollama instance",
+      "base_url": "http://localhost:11434",
+      "default_model": "llama3",
+      "timeout": 120,
+      "retry": 2,
+      "options": {}
+    },
+    "openllm": {
+      "enabled": false,
+      "type": "openllm",
+      "description": "OpenAI-compatible LLM endpoint",
+      "base_url": "http://localhost:8000",
+      "api_key_env": "OPENLLM_API_KEY",
+      "default_model": "default",
+      "timeout": 120,
+      "retry": 2,
+      "headers": {},
+      "options": {}
+    },
+    "claude_code": {
+      "enabled": false,
+      "type": "claude_code",
+      "description": "Claude Code local CLI runtime",
+      "command": "claude",
+      "timeout": 180,
+      "retry": 1,
+      "options": {}
+    },
+    "chatgpt": {
+      "enabled": false,
+      "type": "chatgpt",
+      "description": "ChatGPT via OAuth/API",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "default_model": "gpt-4",
+      "timeout": 120,
+      "retry": 2,
+      "options": {}
+    }
+  }
+}

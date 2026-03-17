@@ -1,0 +1,17 @@
+[Unit]
+Description=PHPClaw Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/phpclaw/agent
+ExecStart=/usr/bin/php spark agent:serve
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/phpclaw/service.log
+StandardError=append:/var/log/phpclaw/error.log
+
+[Install]
+WantedBy=multi-user.target

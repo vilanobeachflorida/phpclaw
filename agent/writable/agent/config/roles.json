@@ -1,0 +1,68 @@
+{
+  "roles": {
+    "heartbeat": {
+      "description": "Lightweight health check role",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 10,
+      "retry": 1
+    },
+    "reasoning": {
+      "description": "Deep reasoning and analysis",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": ["openllm"],
+      "timeout": 120,
+      "retry": 2
+    },
+    "coding": {
+      "description": "Code generation and analysis",
+      "provider": "claude_code",
+      "model": "default",
+      "fallback": ["ollama"],
+      "timeout": 180,
+      "retry": 2
+    },
+    "summarization": {
+      "description": "Fast summarization tasks",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 60,
+      "retry": 1
+    },
+    "planning": {
+      "description": "Task planning and decomposition",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 120,
+      "retry": 2
+    },
+    "browser": {
+      "description": "Web content processing",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 60,
+      "retry": 1
+    },
+    "memory_compaction": {
+      "description": "Memory compaction and summarization",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 120,
+      "retry": 1
+    },
+    "fast_response": {
+      "description": "Quick responses for simple queries",
+      "provider": "ollama",
+      "model": "llama3",
+      "fallback": [],
+      "timeout": 30,
+      "retry": 1
+    }
+  }
+}

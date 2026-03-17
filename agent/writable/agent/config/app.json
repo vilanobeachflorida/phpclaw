@@ -1,0 +1,35 @@
+{
+  "name": "PHPClaw",
+  "version": "0.1.0",
+  "description": "Terminal-first multi-model AI agent shell",
+  "debug": false,
+  "verbose": false,
+  "timezone": "UTC",
+  "storage_path": "writable/agent",
+  "default_provider": "ollama",
+  "default_model": "llama3",
+  "default_role": "reasoning",
+  "default_module": "reasoning",
+  "session": {
+    "auto_save": true,
+    "max_transcript_lines": 10000,
+    "default_name_prefix": "session"
+  },
+  "memory": {
+    "enabled": true,
+    "compaction_interval": 3600,
+    "max_notes_before_compaction": 500,
+    "summary_max_length": 2000
+  },
+  "cache": {
+    "enabled": true,
+    "default_ttl": 3600,
+    "max_size_mb": 500
+  },
+  "service": {
+    "loop_interval_ms": 1000,
+    "heartbeat_interval": 60,
+    "maintenance_interval": 3600,
+    "provider_health_interval": 300
+  }
+}

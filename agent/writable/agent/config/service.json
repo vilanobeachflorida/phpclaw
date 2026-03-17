@@ -1,0 +1,16 @@
+{
+  "service": {
+    "enabled": true,
+    "loop_interval_ms": 1000,
+    "heartbeat_interval": 60,
+    "maintenance_interval": 3600,
+    "provider_health_interval": 300,
+    "task_check_interval": 5,
+    "memory_compaction_interval": 3600,
+    "cache_prune_interval": 7200,
+    "max_concurrent_tasks": 3,
+    "log_file": "writable/agent/logs/service.log",
+    "pid_file": "writable/agent/state/service.pid",
+    "state_file": "writable/agent/state/service.json"
+  }
+}
