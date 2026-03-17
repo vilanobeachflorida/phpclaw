@@ -3,107 +3,226 @@
 ## Project Structure
 
 ```
-agent/
-  app/
-    Commands/Agent/     # Spark CLI commands
-    Libraries/
-      Cache/            # File-based cache manager
-      Memory/           # Memory ingestion and compaction
-      Modules/          # Agent modules (reasoning, coding, etc.)
-      Providers/        # LLM provider adapters
-      Router/           # Model routing
-      Service/          # Service loop, provider manager, tool registry
-      Session/          # Session management
-      Storage/          # File storage layer, config loader
-      Tasks/            # Background task manager
-      Tools/            # Agent tools (file ops, http, shell, etc.)
-  writable/agent/       # All runtime data (file-based)
-  templates/            # Scaffolding templates
-docs/                   # Documentation
+phpclaw/
+├── agent/                          # CodeIgniter 4 application
+│   ├── app/
+│   │   ├── Commands/               # Spark CLI commands
+│   │   │   ├── AgentChat.php
+│   │   │   ├── AgentConfig.php
+│   │   │   ├── AgentServe.php
+│   │   │   ├── AgentStatus.php
+│   │   │   ├── AgentProviders.php
+│   │   │   ├── AgentModels.php
+│   │   │   ├── AgentRoles.php
+│   │   │   ├── AgentModules.php
+│   │   │   ├── AgentSessions.php
+│   │   │   ├── AgentSessionShow.php
+│   │   │   ├── AgentTasks.php
+│   │   │   ├── AgentTaskShow.php
+│   │   │   ├── AgentTaskTail.php
+│   │   │   ├── AgentTaskCancel.php
+│   │   │   ├── AgentMemoryShow.php
+│   │   │   ├── AgentMemoryCompact.php
+│   │   │   ├── AgentMaintain.php
+│   │   │   ├── AgentCacheStatus.php
+│   │   │   ├── AgentCacheClear.php
+│   │   │   ├── AgentCachePrune.php
+│   │   │   ├── AgentTools.php
+│   │   │   ├── AgentToolScaffold.php
+│   │   │   └── AgentProviderScaffold.php
+│   │   ├── Libraries/
+│   │   │   └── Agent/
+│   │   │       ├── Core/
+│   │   │       │   ├── FileStorage.php
+│   │   │       │   ├── ConfigLoader.php
+│   │   │       │   └── ServiceLoop.php
+│   │   │       ├── Managers/
+│   │   │       │   ├── SessionManager.php
+│   │   │       │   ├── TaskManager.php
+│   │   │       │   ├── MemoryManager.php
+│   │   │       │   └── CacheManager.php
+│   │   │       ├── Routing/
+│   │   │       │   ├── ModelRouter.php
+│   │   │       │   └── ProviderManager.php
+│   │   │       ├── Tools/
+│   │   │       │   ├── ToolInterface.php
+│   │   │       │   ├── BaseTool.php
+│   │   │       │   ├── ToolRegistry.php
+│   │   │       │   ├── FileReadTool.php
+│   │   │       │   ├── FileWriteTool.php
+│   │   │       │   ├── ShellExecTool.php
+│   │   │       │   └── ...
+│   │   │       ├── Providers/
+│   │   │       │   ├── ProviderInterface.php
+│   │   │       │   ├── BaseProvider.php
+│   │   │       │   ├── OllamaProvider.php
+│   │   │       │   ├── OpenLLMProvider.php
+│   │   │       │   ├── ChatGPTProvider.php
+│   │   │       │   └── ClaudeCodeProvider.php
+│   │   │       └── Modules/
+│   │   │           ├── BaseModule.php
+│   │   │           ├── HeartbeatModule.php
+│   │   │           ├── ReasoningModule.php
+│   │   │           ├── CodingModule.php
+│   │   │           └── ...
+│   │   └── Config/
+│   ├── writable/
+│   │   └── agent/                  # Runtime data (see storage.md)
+│   ├── public/
+│   ├── spark                       # CLI entry point
+│   ├── .env.example
+│   └── composer.json
+├── docs/                           # Documentation
+├── phpclaw.service                 # systemd service file
+├── README.md
+└── LICENSE
 ```
 
 ## Adding a New Tool
 
-1. Scaffold:
-   ```bash
-   php spark agent:tool:scaffold my_tool
-   ```
+### 1. Scaffold
 
-2. Edit `app/Libraries/Tools/MyToolTool.php`:
-   - Define `getInputSchema()` with expected arguments
-   - Implement `execute()` method
-   - Return `$this->success($data)` or `$this->error($message)`
+```bash
+php spark agent:tool:scaffold MyTool
+```
 
-3. Register in `writable/agent/config/tools.json`:
-   ```json
-   "my_tool": { "enabled": true, "description": "My custom tool", "timeout": 10 }
-   ```
+This creates `app/Libraries/Agent/Tools/MyTool.php` from the tool template.
 
-4. Add to `app/Libraries/Service/ToolRegistry.php` builtinTools map.
+### 2. Implement
+
+Edit the generated file:
+
+```php
+<?php
+
+namespace App\Libraries\Agent\Tools;
+
+class MyTool extends BaseTool
+{
+    protected string $name = 'my_tool';
+    protected string $description = 'What this tool does';
+
+    public function getParameters(): array
+    {
+        return [
+            'input' => [
+                'type' => 'string',
+                'description' => 'The input to process',
+                'required' => true,
+            ],
+        ];
+    }
+
+    public function execute(array $params): array
+    {
+        $input = $params['input'];
+
+        // Your implementation here
+        $result = $this->processInput($input);
+
+        return $this->success($result);
+    }
+
+    private function processInput(string $input): string
+    {
+        // ...
+    }
+}
+```
+
+### 3. Register
+
+The ToolRegistry auto-discovers tool classes in the `Tools/` directory that extend `BaseTool`. No additional registration step is needed.
+
+To make the tool available to a module, add its name to the module's `tools` array in `modules.json`.
 
 ## Adding a New Provider
 
-1. Scaffold:
-   ```bash
-   php spark agent:provider:scaffold my_provider
-   ```
+### 1. Scaffold
 
-2. Edit `app/Libraries/Providers/MyProviderProvider.php`:
-   - Implement `healthCheck()`, `listModels()`, `chat()`
-   - Use `$this->httpRequest()` for API calls
-   - Return `$this->successResponse()` or `$this->errorResponse()`
+```bash
+php spark agent:provider:scaffold MyProvider
+```
 
-3. Register in `writable/agent/config/providers.json`:
-   ```json
-   "my_provider": { "enabled": true, "type": "my_provider", ... }
-   ```
+This creates `app/Libraries/Agent/Providers/MyProvider.php` from the provider template.
 
-4. Add to `app/Libraries/Service/ProviderManager.php` typeMap.
+### 2. Implement
+
+Edit the generated file to implement `healthCheck()`, `listModels()`, and `chat()`.
+
+### 3. Register
+
+Add the provider to `writable/agent/config/providers.json`:
+
+```json
+{
+  "my_provider": {
+    "type": "my_provider",
+    "base_url": "http://localhost:5000",
+    "enabled": true
+  }
+}
+```
+
+Then assign the provider to roles in `roles.json` as needed.
 
 ## Adding a New Module
 
-1. Create `app/Libraries/Modules/MyModule.php` extending `BaseModule`
-2. Set name, description, role
-3. Implement `getDefaultPrompt()`
-4. Add prompt file to `writable/agent/prompts/modules/my_module.md`
-5. Register in `writable/agent/config/modules.json`
+1. Create a module class in `app/Libraries/Agent/Modules/` extending `BaseModule`.
+2. Create a prompt file in `writable/agent/prompts/modules/`.
+3. Add the module configuration to `writable/agent/config/modules.json`.
+4. Optionally create a new role in `roles.json` or reuse an existing one.
 
 ## Config Files
 
-All config is in `writable/agent/config/`:
-- `app.json` - Global settings
-- `providers.json` - Provider configurations
-- `roles.json` - Role-to-provider/model mapping
-- `modules.json` - Module configurations
-- `tools.json` - Tool enable/disable and settings
-- `service.json` - Service loop configuration
+All configuration lives in `writable/agent/config/`:
+
+| File | Purpose |
+|---|---|
+| `providers.json` | Provider definitions, endpoints, credentials |
+| `roles.json` | Role-to-provider/model mappings |
+| `modules.json` | Module definitions and policies |
+| `service.json` | Service loop timing and behavior |
+
+Config files are JSON. Edit them directly -- there is no config UI.
 
 ## Testing Locally
 
+### Prerequisites
+
+1. PHP 8.2+ with curl extension.
+2. At least one provider configured (Ollama is recommended for local development).
+
+### Basic Workflow
+
 ```bash
-cd agent
+# Verify configuration
+php spark agent:config
 
-# Check commands are registered
-php spark list
-
-# Test config loading
-php spark agent:config app
-
-# Test provider health
+# Check provider connectivity
 php spark agent:providers
 
-# Start interactive chat
+# List available models
+php spark agent:models
+
+# Start a chat session
 php spark agent:chat
 
-# Start service loop
+# Test the service loop
 php spark agent:serve
 ```
 
-## Contributing
+### Debugging
 
-1. Fork the repository
-2. Create a feature branch
-3. Follow existing code patterns (tools extend BaseTool, providers extend BaseProvider)
-4. Keep it simple - prefer boring code over clever code
-5. File-based storage only - no databases
-6. Submit a pull request
+Use the `/debug` slash command in chat to toggle verbose output. This shows the raw messages sent to and received from providers, tool call details, and routing decisions.
+
+## Contributing Guidelines
+
+1. Follow PSR-12 coding standards for PHP.
+2. Keep commands thin -- business logic belongs in libraries.
+3. All state changes go through the appropriate manager class.
+4. Use FileStorage for all file I/O -- no direct `file_get_contents()` / `file_put_contents()`.
+5. New tools must implement `ToolInterface` (preferably extend `BaseTool`).
+6. New providers must implement `ProviderInterface` (preferably extend `BaseProvider`).
+7. Document new features in the appropriate docs file.
+8. Test with at least one local provider before submitting changes.

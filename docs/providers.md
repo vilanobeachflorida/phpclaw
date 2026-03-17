@@ -1,8 +1,10 @@
 # Providers
 
-Providers are adapters that connect PHPClaw to model APIs. Each provider handles authentication, request formatting, response parsing, health checks, and model discovery for a specific backend.
+## Overview
 
-## ProviderInterface
+Providers are adapters that connect PHPClaw to AI model backends. Each provider handles the specifics of communicating with a particular API while exposing a uniform interface.
+
+## ProviderInterface and BaseProvider
 
 All providers implement `ProviderInterface`:
 
@@ -10,60 +12,76 @@ All providers implement `ProviderInterface`:
 interface ProviderInterface
 {
     public function getName(): string;
-    public function chat(array $messages, array $options = []): array;
-    public function listModels(): array;
-    public function healthCheck(): bool;
+    public function getType(): string;
     public function isEnabled(): bool;
+    public function healthCheck(): bool;
+    public function listModels(): array;
+    public function chat(array $messages, array $options = []): array;
 }
 ```
 
-## BaseProvider
+The `BaseProvider` abstract class provides common functionality:
 
-`BaseProvider` is an abstract class providing common functionality:
+```php
+abstract class BaseProvider implements ProviderInterface
+{
+    protected string $name;
+    protected string $type;
+    protected array $config;
+    protected bool $enabled;
 
-- Configuration loading from `providers.json`
-- HTTP client setup with timeout and retry handling
-- Response normalization
-- Error handling and logging
+    public function getName(): string;
+    public function getType(): string;
+    public function isEnabled(): bool;
+    abstract public function healthCheck(): bool;
+    abstract public function listModels(): array;
+    abstract public function chat(array $messages, array $options = []): array;
 
-Custom providers should extend `BaseProvider`.
+    protected function httpRequest(string $method, string $url, array $data = []): array;
+}
+```
 
 ## Built-in Providers
 
 ### Ollama
 
-Connects to a local Ollama instance. Supports all Ollama-compatible models.
+Local model execution through the Ollama API.
 
-- **Endpoint**: `http://localhost:11434` (default)
+- **Type**: `ollama`
+- **Base URL**: `http://localhost:11434` (default)
 - **Authentication**: None required
-- **Model discovery**: Automatic via Ollama API
-- **Use case**: Local inference with open models
+- **Models**: Any model pulled into Ollama (llama3, codellama, mistral, etc.)
+- **Features**: Streaming support, tool calling (model-dependent)
 
 ### OpenLLM
 
-Connects to OpenAI-compatible API endpoints, including self-hosted OpenLLM servers, vLLM, and other compatible backends.
+Compatible with OpenAI-style API endpoints, including self-hosted and third-party services.
 
-- **Endpoint**: Configurable
-- **Authentication**: API key (optional, depending on server)
-- **Model discovery**: Via API endpoint
-- **Use case**: Self-hosted model servers with OpenAI-compatible APIs
+- **Type**: `openllm`
+- **Base URL**: Configurable
+- **Authentication**: API key (Bearer token)
+- **Models**: Depends on the backend service
+- **Features**: OpenAI-compatible chat completions endpoint
 
 ### ChatGPT
 
-Connects to the OpenAI API for GPT models.
+OpenAI's ChatGPT API.
 
-- **Endpoint**: `https://api.openai.com/v1` (default)
+- **Type**: `chatgpt`
+- **Base URL**: `https://api.openai.com/v1` (default)
 - **Authentication**: API key required
-- **Model discovery**: Via OpenAI models endpoint
-- **Use case**: Cloud-hosted OpenAI models (GPT-4o, GPT-4o-mini, etc.)
+- **Models**: gpt-4o, gpt-4, gpt-3.5-turbo, etc.
+- **Features**: Full tool calling support, streaming, JSON mode
 
 ### Claude Code
 
-Integrates with the Claude Code CLI tool for Anthropic model access.
+Integration with the Claude Code CLI.
 
-- **Authentication**: Managed by the Claude Code CLI
-- **Model discovery**: Via CLI capabilities
-- **Use case**: Anthropic models through the Claude Code interface
+- **Type**: `claude_code`
+- **Base URL**: N/A (uses CLI)
+- **Authentication**: Handled by Claude CLI authentication
+- **Models**: Claude models available through the CLI
+- **Features**: Code-focused interactions, file operations
 
 ## Provider Configuration
 
@@ -73,106 +91,148 @@ Providers are configured in `writable/agent/config/providers.json`:
 {
   "ollama": {
     "type": "ollama",
-    "endpoint": "http://localhost:11434",
-    "models": ["llama3", "codellama"],
-    "default_model": "llama3",
+    "base_url": "http://localhost:11434",
     "enabled": true,
-    "timeout": 120,
-    "retry": {
-      "max_attempts": 3,
-      "delay_ms": 1000
+    "options": {
+      "timeout": 120,
+      "retries": 2
     }
   },
   "chatgpt": {
     "type": "chatgpt",
-    "endpoint": "https://api.openai.com/v1",
+    "base_url": "https://api.openai.com/v1",
     "api_key": "sk-...",
-    "models": ["gpt-4o", "gpt-4o-mini"],
-    "default_model": "gpt-4o",
     "enabled": true,
-    "timeout": 60
+    "options": {
+      "timeout": 60,
+      "retries": 3
+    }
+  },
+  "openllm": {
+    "type": "openllm",
+    "base_url": "http://localhost:3000",
+    "api_key": "your-key",
+    "enabled": false,
+    "options": {}
+  },
+  "claude": {
+    "type": "claude_code",
+    "enabled": true,
+    "options": {
+      "cli_path": "/usr/local/bin/claude"
+    }
   }
 }
 ```
 
-Each provider entry includes:
-- **type** -- the provider adapter to use
-- **endpoint** -- the API base URL
-- **api_key** -- authentication credential (if required)
-- **models** -- list of available models (or discovered automatically)
-- **default_model** -- the model to use when none is specified
-- **enabled** -- whether this provider is active
-- **timeout** -- request timeout in seconds
-- **retry** -- retry configuration for failed requests
-
 ## Health Checks
 
-Each provider implements a `healthCheck()` method that verifies connectivity and readiness. Health checks are run:
+Each provider implements a `healthCheck()` method that verifies connectivity:
 
-- On agent startup
-- Periodically by the service loop
-- On demand via `agent:providers`
+- **Ollama**: Calls `GET /api/tags` to verify the server is running.
+- **OpenLLM**: Calls `GET /v1/models` to verify the endpoint responds.
+- **ChatGPT**: Calls `GET /v1/models` with authentication to verify the API key is valid.
+- **Claude Code**: Checks that the `claude` CLI binary exists and is executable.
 
-A health check typically sends a lightweight request (e.g., list models) to verify the backend is reachable and responding.
+Health checks are run by `agent:providers` and periodically by the service loop.
 
 ## Model Listing
 
-The `listModels()` method returns all models available from a provider. This is used by:
+The `listModels()` method returns available models for each provider:
 
-- `agent:models` command to display available models
-- The `/model` slash command in chat
-- The ModelRouter for validation
+```bash
+php spark agent:models
+```
+
+Output example:
+
+```
+Provider: ollama
+  - llama3
+  - codellama
+  - mistral
+
+Provider: chatgpt
+  - gpt-4o
+  - gpt-4
+  - gpt-3.5-turbo
+```
 
 ## Adding Custom Providers
 
-### Using the Scaffold Command
+### Scaffold a New Provider
 
 ```bash
-php spark agent:provider:scaffold MyProvider
+php spark agent:provider:scaffold MyCustomProvider
 ```
 
-This generates a new provider file with the required structure.
+This generates a provider class from the template at `writable/agent/templates/provider.php.tpl`.
 
-### Implementation
+### Implement the Provider
+
+Fill in the abstract methods:
 
 ```php
 <?php
 
 namespace App\Libraries\Agent\Providers;
 
-class MyProvider extends BaseProvider
+class MyCustomProvider extends BaseProvider
 {
-    protected string $name = 'myprovider';
+    protected string $type = 'my_custom';
 
-    public function chat(array $messages, array $options = []): array
+    public function healthCheck(): bool
     {
-        // Send messages to your model API
-        // Return normalized response
+        // Check connectivity to your backend
     }
 
     public function listModels(): array
     {
-        // Return array of available model names
+        // Return available model names
     }
 
-    public function healthCheck(): bool
+    public function chat(array $messages, array $options = []): array
     {
-        // Return true if the backend is reachable
+        // Send messages to your backend and return the response
     }
 }
 ```
 
-After creating the provider class, add its configuration to `providers.json` and it will be available for use.
+### Register the Provider
+
+Add the provider configuration to `providers.json`:
+
+```json
+{
+  "my_custom": {
+    "type": "my_custom",
+    "base_url": "http://localhost:5000",
+    "enabled": true
+  }
+}
+```
 
 ## ChatGPT OAuth Notes
 
-PHPClaw does not manage OpenAI authentication or OAuth flows. The API key must be obtained externally from the OpenAI platform and supplied in `providers.json`. PHPClaw never stores credentials beyond the configuration file. Protect your `providers.json` file with appropriate filesystem permissions.
+PHPClaw does not manage OpenAI account creation, billing, or OAuth flows. The API key must be obtained externally from the OpenAI platform and provided in the provider configuration. PHPClaw stores the key in `providers.json` and uses it for Bearer token authentication.
+
+For security, consider setting the API key via environment variable rather than storing it directly in the config file:
+
+```json
+{
+  "chatgpt": {
+    "type": "chatgpt",
+    "api_key_env": "OPENAI_API_KEY",
+    "enabled": true
+  }
+}
+```
 
 ## Claude Code CLI Integration
 
-The Claude Code provider works differently from API-based providers. Instead of making HTTP requests, it invokes the `claude` CLI tool as a subprocess. This means:
+The Claude Code provider works differently from HTTP-based providers. Instead of making API calls, it invokes the `claude` CLI binary as a subprocess. This means:
 
-- The Claude Code CLI must be installed and authenticated separately
-- Authentication is managed by the CLI tool, not by PHPClaw
-- Model selection is handled through CLI flags
-- The provider translates between PHPClaw's message format and the CLI's input/output format
+- The `claude` CLI must be installed and on the system PATH (or configured with `cli_path`).
+- Authentication is handled by the CLI's own auth mechanism.
+- Model selection is handled by the CLI based on your Anthropic account.
+- Communication happens through stdin/stdout of the subprocess.

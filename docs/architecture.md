@@ -6,66 +6,77 @@ PHPClaw follows a layered architecture with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────┐
-│          CLI Interface              │
-│   (Spark Commands, Chat REPL)       │
+│           CLI Interface             │
+│  (Spark Commands, Chat REPL)        │
 ├─────────────────────────────────────┤
-│          Commands Layer             │
-│   (CodeIgniter Spark Commands)      │
+│           Commands Layer            │
+│  (CodeIgniter Spark Commands)       │
 ├─────────────────────────────────────┤
 │          Libraries Layer            │
-│   (Core Services & Managers)        │
+│  (Core managers, router, registry)  │
 ├─────────────────────────────────────┤
 │          Storage Layer              │
-│   (File-based JSON/NDJSON/MD)       │
+│  (FileStorage, JSON, NDJSON, MD)    │
 └─────────────────────────────────────┘
 ```
 
-- **CLI Interface** -- the user-facing layer. Spark commands handle argument parsing and output formatting. The chat REPL provides an interactive session with slash command support.
-- **Commands Layer** -- CodeIgniter 4 Spark commands that wire user input to library calls. Each command is a thin controller that delegates to the appropriate library.
-- **Libraries Layer** -- the core logic. Managers, routers, registries, and the service loop all live here. Libraries are stateless where possible and operate on the storage layer.
-- **Storage Layer** -- all persistent state is stored as files on disk. No database is used. See the [Storage documentation](storage.md) for details.
+### CLI Interface
+
+The top layer is the user-facing CLI. This includes Spark commands (`agent:chat`, `agent:serve`, etc.) and the interactive chat REPL with its slash commands.
+
+### Commands Layer
+
+CodeIgniter 4 Spark commands that parse arguments, invoke library methods, and format output for the terminal. Each command is a thin wrapper that delegates to the libraries layer.
+
+### Libraries Layer
+
+The core logic of PHPClaw. Managers, routers, and registries that coordinate providers, tools, sessions, tasks, and memory.
+
+### Storage Layer
+
+All persistence is handled through file-based storage. No database is used. See `storage.md` for full details.
 
 ## Core Components
 
 ### FileStorage
 
-Low-level file operations: read/write JSON, append NDJSON lines, manage lock files, ensure directory structure. All other components use FileStorage rather than direct file I/O.
+Low-level file I/O abstraction. Handles reading, writing, appending, and locking for JSON, NDJSON, Markdown, and plain text files. All other components use FileStorage rather than direct filesystem calls.
 
 ### ConfigLoader
 
-Reads and validates configuration files from `writable/agent/config/`. Merges defaults with user overrides. Provides typed access to configuration values.
+Reads and validates configuration from `writable/agent/config/`. Supports providers, roles, modules, and service configuration. Provides typed access to config values with defaults.
 
 ### SessionManager
 
-Creates, loads, saves, and lists chat sessions. Each session has a unique ID, metadata in `session.json`, and an append-only transcript in `transcript.ndjson`.
+Creates, loads, and manages chat sessions. Each session has a unique ID, metadata in `session.json`, and an append-only transcript in `transcript.ndjson`. Sessions track the active provider, model, role, and module.
 
 ### TaskManager
 
-Manages background task lifecycle: creation, queuing, status transitions, progress tracking, and cancellation. Tasks are stored as directories with structured files.
+Manages the background task queue. Handles task creation, status transitions (queued -> running -> completed/failed/cancelled), step logging, progress tracking, and artifact storage.
 
 ### MemoryManager
 
-Handles the memory pipeline: ingesting transcripts, extracting notes, running compaction, and generating summaries. Operates across global, session, module, and task scopes.
+Implements the layered memory system. Ingests transcript entries, extracts notes, runs compaction, and generates summaries. Operates across global, session, module, and task scopes.
 
 ### CacheManager
 
-Provides response caching with TTL-based expiration. Maintains an index for fast lookups and supports pruning of expired entries.
+Manages response and artifact caching with TTL-based expiration. Supports status reporting, targeted clearing, and pruning of expired entries.
 
 ### ModelRouter
 
-Routes requests to the appropriate provider and model based on role assignments. Handles fallback chains, timeouts, and retries.
+Routes requests to the appropriate provider and model based on role assignments. Consults the role configuration to determine which provider/model handles a given role, with fallback chains for resilience.
 
 ### ProviderManager
 
-Manages provider instances, health checks, and model discovery. Loads provider configurations and instantiates the correct adapter classes.
+Manages provider instances. Handles provider registration, health checks, model listing, and lifecycle. Each provider implements a common interface for sending prompts and receiving responses.
 
 ### ToolRegistry
 
-Discovers, registers, and manages tools. Provides tool listing, lookup by name, and execution dispatch. Tools are validated against the ToolInterface contract.
+Registers and manages available tools. Tools are discovered, validated, and made available for invocation during chat and task execution. Handles tool execution lifecycle and result formatting.
 
 ### ServiceLoop
 
-The persistent process that drives background operations. Runs in a loop: check task queues, process pending tasks, run heartbeats, perform maintenance, sleep, and repeat.
+The long-running process that powers background operation. Continuously cycles through task processing, heartbeat checks, maintenance routines, and health monitoring.
 
 ## Data Flow
 
@@ -73,101 +84,69 @@ The persistent process that drives background operations. Runs in a loop: check 
 
 ```
 User Input
-    │
-    ▼
-Chat REPL (parses slash commands or passes message)
-    │
-    ▼
+  │
+  ▼
+Chat REPL (parses input, checks for slash commands)
+  │
+  ▼
 ModelRouter (resolves role -> provider + model)
-    │
-    ▼
-Provider Adapter (sends request to model API)
-    │
-    ▼
-Model Response
-    │
-    ▼
+  │
+  ▼
+Provider (sends prompt to AI backend, receives response)
+  │
+  ▼
+Tool Execution (if response contains tool calls)
+  │
+  ▼
+Response Display (formatted output to terminal)
+  │
+  ▼
 Transcript (appended to session transcript.ndjson)
-    │
-    ▼
-Memory Pipeline (notes extracted, compaction scheduled)
-    │
-    ▼
-Response displayed to user
+  │
+  ▼
+Memory (notes extracted from transcript)
 ```
 
-### Background Task Processing
+### Service Loop
 
 ```
-Task Queued (task.json created with status: queued)
-    │
-    ▼
-ServiceLoop picks up task
-    │
-    ▼
-Task status -> running
-    │
-    ▼
-Steps executed (steps.ndjson appended)
-    │
-    ▼
-Progress reported (progress.ndjson appended)
-    │
-    ▼
-Task status -> completed/failed
-    │
-    ▼
-Output written (output.md, artifacts/)
+Start
+  │
+  ▼
+Load Configuration
+  │
+  ▼
+┌──────────────────────────┐
+│  Check Task Queue        │◄──────┐
+│  Process Pending Tasks   │       │
+│  Run Maintenance         │       │
+│  Heartbeat Check         │       │
+│  Health Checks           │       │
+│  Sleep (interval)        │───────┘
+└──────────────────────────┘
+  │
+  ▼
+Shutdown (on signal)
 ```
-
-## Service Loop
-
-The service loop is the heartbeat of PHPClaw when running as a persistent service:
-
-```
-load configuration
-    │
-    ▼
-┌──► check task queues
-│       │
-│       ▼
-│   process pending tasks
-│       │
-│       ▼
-│   run maintenance (if due)
-│       │
-│       ▼
-│   send heartbeat
-│       │
-│       ▼
-│   health check providers
-│       │
-│       ▼
-│   sleep (configurable interval)
-│       │
-└───────┘
-```
-
-The loop continues until a shutdown signal is received (SIGTERM, SIGINT).
 
 ## Design Principles
 
 ### File-Based Everything
 
-All state is stored in files. JSON for structured data, NDJSON for append-only logs, Markdown for human-readable summaries. No database, no external state stores. This makes the system inspectable, portable, and simple to back up.
+All state is stored in files. No database, no Redis, no external state stores. This keeps the system self-contained, inspectable, and easy to back up or move.
 
 ### Template-Driven Extensibility
 
-New tools and providers are created from templates via scaffold commands. This ensures consistent structure and reduces boilerplate errors.
+New tools and providers are created from templates using scaffold commands. This ensures consistent structure and reduces boilerplate.
 
 ### Explicit Control Flow
 
-No magic, no hidden dependency injection containers, no event buses. The code path from command to storage is traceable by reading the source. Libraries are instantiated and called directly.
+No magic routing or hidden event buses. The flow from command to library to storage is direct and traceable. Each component has clear responsibilities.
 
 ### Append-Only Logs
 
-Transcripts, task steps, progress entries, and memory notes are append-only NDJSON files. Data is never modified or deleted from these logs. This provides a complete audit trail.
+Transcripts, step logs, and progress logs are append-only NDJSON files. Data is never modified in place. This provides a complete audit trail and prevents data loss.
 
 ### Derived Summaries
 
-Summaries and compacted artifacts are always derived from raw data. They can be regenerated at any time. The raw logs are the source of truth; summaries are convenience artifacts.
+Summaries and compacted artifacts are derived from raw data. The raw logs are the source of truth. Summaries can be regenerated at any time from the underlying data.

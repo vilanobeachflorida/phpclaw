@@ -1,22 +1,26 @@
 # Modules
 
-Modules are role-specific configurations that bundle a system prompt, tool access, cache policy, memory policy, and model routing into a named profile. They allow the agent to adopt different personas and capabilities depending on the task.
+## Overview
 
-## BaseModule
+Modules are role-based configurations that combine a system prompt, a set of tools, caching and memory policies, and optional provider/model overrides. They define how the agent behaves for different types of tasks.
 
-All modules are defined as configuration entries (not PHP classes). The `BaseModule` class provides the runtime wrapper:
+## BaseModule Class
 
 ```php
-class BaseModule
+abstract class BaseModule
 {
+    protected string $name;
+    protected string $role;
+    protected array $tools = [];
+    protected array $config = [];
+
     public function getName(): string;
     public function getRole(): string;
     public function getTools(): array;
+    public function getConfig(): array;
     public function getPrompt(): string;
     public function getCachePolicy(): array;
     public function getMemoryPolicy(): array;
-    public function getProviderOverride(): ?string;
-    public function getModelOverride(): ?string;
 }
 ```
 
@@ -24,138 +28,138 @@ class BaseModule
 
 ### heartbeat
 
-System health monitoring. Used by the service loop to verify model connectivity.
+System health monitoring module. Used by the service loop to verify provider connectivity and basic responsiveness.
 
-- **Role**: system
-- **Tools**: none
-- **Cache**: disabled
-- **Memory**: disabled
+- **Role**: `system`
+- **Tools**: None
+- **Cache Policy**: No caching
+- **Memory Policy**: No memory
+- **Prompt**: `prompts/modules/heartbeat.md`
 
 ### reasoning
 
-General-purpose reasoning and analysis. Step-by-step problem solving.
+General-purpose reasoning and analysis. Used for complex problem-solving that requires step-by-step thinking.
 
-- **Role**: reasoning
-- **Tools**: memory_search
-- **Cache**: enabled (short TTL)
-- **Memory**: enabled
+- **Role**: `reasoning`
+- **Tools**: `memory_query`, `calculator`
+- **Cache Policy**: Cache responses for identical prompts (TTL: 1 hour)
+- **Memory Policy**: Extract notes, session scope
+- **Prompt**: `prompts/modules/reasoning.md`
 
 ### coding
 
-Software engineering tasks. Code generation, review, and analysis.
+Software engineering tasks. Code generation, refactoring, debugging, and review.
 
-- **Role**: coding
-- **Tools**: file_read, file_write, file_list, file_search, shell_exec, grep
-- **Cache**: disabled
-- **Memory**: enabled
+- **Role**: `coding`
+- **Tools**: `file_read`, `file_write`, `file_list`, `file_search`, `shell_exec`, `grep`
+- **Cache Policy**: No caching
+- **Memory Policy**: Extract notes, session and global scope
+- **Prompt**: `prompts/modules/coding.md`
 
 ### summarizer
 
-Content summarization. Produces concise summaries of text, conversations, and documents.
+Content summarization. Produces concise summaries of documents, conversations, and data.
 
-- **Role**: summarizer
-- **Tools**: file_read, memory_search
-- **Cache**: enabled
-- **Memory**: disabled
+- **Role**: `summarizer`
+- **Tools**: `file_read`, `web_fetch`
+- **Cache Policy**: Cache summaries (TTL: 24 hours)
+- **Memory Policy**: No memory
+- **Prompt**: `prompts/modules/summarizer.md`
 
 ### memory
 
-Memory management and compaction. Analyzes logs and extracts key information.
+Memory management. Analyzes conversation logs, extracts notes, and produces compacted summaries.
 
-- **Role**: memory
-- **Tools**: memory_search
-- **Cache**: disabled
-- **Memory**: disabled (operates on memory but does not write to its own scope)
+- **Role**: `memory`
+- **Tools**: `memory_query`
+- **Cache Policy**: No caching
+- **Memory Policy**: Read-only (does not write to its own memory)
+- **Prompt**: `prompts/modules/memory.md`
 
 ### planner
 
-Task planning and decomposition. Breaks complex tasks into actionable steps.
+Task planning and decomposition. Breaks complex tasks into structured, actionable steps.
 
-- **Role**: planning
-- **Tools**: task_create, memory_search
-- **Cache**: disabled
-- **Memory**: enabled
+- **Role**: `planner`
+- **Tools**: `memory_query`, `task_create`
+- **Cache Policy**: No caching
+- **Memory Policy**: Extract notes, session scope
+- **Prompt**: `prompts/modules/planner.md`
 
 ### browser
 
-Web content processing. Fetches and analyzes web pages.
+Web content processing. Fetches and analyzes web pages, extracts relevant information.
 
-- **Role**: browsing
-- **Tools**: web_fetch
-- **Cache**: enabled (long TTL)
-- **Memory**: disabled
+- **Role**: `browser`
+- **Tools**: `web_fetch`, `grep`
+- **Cache Policy**: Cache fetched content (TTL: 1 hour)
+- **Memory Policy**: No memory
+- **Prompt**: `prompts/modules/browser.md`
 
 ### tool_router
 
-Tool coordination. Determines which tools to use and in what order for multi-step operations.
+Multi-tool coordination. Determines which tools to use and orchestrates multi-step tool operations.
 
-- **Role**: routing
-- **Tools**: all tools available
-- **Cache**: disabled
-- **Memory**: enabled
+- **Role**: `tool_router`
+- **Tools**: All available tools
+- **Cache Policy**: No caching
+- **Memory Policy**: Extract notes, session scope
+- **Prompt**: `prompts/modules/tool_router.md`
 
 ## Module Configuration
 
-Modules are defined in `writable/agent/config/modules.json`:
+Modules are configured in `writable/agent/config/modules.json`:
 
 ```json
 {
   "coding": {
     "role": "coding",
     "tools": ["file_read", "file_write", "file_list", "file_search", "shell_exec", "grep"],
-    "prompt": "prompts/modules/coding.md",
     "cache_policy": {
       "enabled": false
     },
     "memory_policy": {
       "enabled": true,
-      "scope": "module",
-      "auto_compact": true
+      "extract_notes": true,
+      "scopes": ["session", "global"]
     },
-    "provider": null,
-    "model": null
+    "prompt": "prompts/modules/coding.md"
   }
 }
 ```
 
 ### Configuration Fields
 
-- **role** -- the role name used for model routing (maps to `roles.json`).
-- **tools** -- array of tool names this module can access. The agent will only offer these tools when operating under this module.
-- **prompt** -- path to the module's system prompt file, relative to `writable/agent/`.
-- **cache_policy** -- controls response caching for this module.
-  - `enabled` -- whether to cache responses.
-  - `ttl` -- cache time-to-live in seconds (if enabled).
-- **memory_policy** -- controls memory behavior for this module.
-  - `enabled` -- whether to record and use memory.
-  - `scope` -- memory scope (`global`, `session`, `module`, `task`).
-  - `auto_compact` -- whether to trigger compaction automatically.
-- **provider** -- override the default provider for this module (null uses role-based routing).
-- **model** -- override the default model for this module (null uses role-based routing).
+| Field | Type | Description |
+|---|---|---|
+| `role` | string | The role this module uses for model routing |
+| `tools` | array | List of tool names available to this module |
+| `cache_policy` | object | Caching configuration |
+| `cache_policy.enabled` | bool | Whether response caching is active |
+| `cache_policy.ttl` | int | Cache TTL in seconds |
+| `memory_policy` | object | Memory configuration |
+| `memory_policy.enabled` | bool | Whether memory is active |
+| `memory_policy.extract_notes` | bool | Whether to extract notes from responses |
+| `memory_policy.scopes` | array | Memory scopes to write to |
+| `prompt` | string | Path to the module prompt file (relative to `writable/agent/`) |
 
 ## Module-to-Role Mapping
 
-Each module specifies a `role` that determines which model handles its requests. The role is resolved through `roles.json` to find the appropriate provider and model. This indirection allows changing model assignments without modifying module configurations.
-
-For example:
-- The `coding` module uses the `coding` role
-- The `coding` role maps to `chatgpt` provider with `gpt-4o` model
-- Changing the coding role's model in `roles.json` affects all modules using that role
+Each module specifies a `role` that determines which provider and model handle its requests. The role is resolved by the ModelRouter using the configuration in `roles.json`. This allows the same module to use different models by changing the role mapping without modifying the module itself.
 
 ## Provider and Model Overrides
 
-A module can bypass role-based routing by specifying `provider` and/or `model` directly:
+Modules can optionally specify provider and model overrides that bypass role-based routing:
 
 ```json
 {
-  "heartbeat": {
-    "role": "system",
-    "provider": "ollama",
-    "model": "llama3",
-    "tools": [],
-    "prompt": "prompts/modules/heartbeat.md"
+  "coding": {
+    "role": "coding",
+    "provider_override": "chatgpt",
+    "model_override": "gpt-4o",
+    "tools": ["file_read", "file_write"]
   }
 }
 ```
 
-When overrides are set, the ModelRouter uses them directly instead of consulting `roles.json`. This is useful for modules that need a specific model regardless of role configuration.
+When overrides are present, the ModelRouter uses them directly instead of consulting the role configuration. This is useful for pinning a specific module to a particular model.

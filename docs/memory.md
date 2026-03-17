@@ -1,135 +1,127 @@
 # Memory System
 
-PHPClaw uses a layered memory system that transforms raw conversation data into compact, searchable knowledge.
+## Overview
+
+PHPClaw implements a layered memory system that preserves conversation context across sessions while managing storage size through compaction. Raw logs are never destroyed -- summaries and compacted artifacts are derived views.
 
 ## Layered Memory
 
-Memory flows through four layers:
+The memory system operates in four layers, from raw to refined:
 
 ```
 Raw Logs (transcript.ndjson)
-    │
-    ▼
+  │
+  ▼
 Notes (notes.ndjson)
-    │
-    ▼
+  │
+  ▼
 Summaries (summary.md)
-    │
-    ▼
-Compacted Artifacts (compacted.json)
+  │
+  ▼
+Compacted Artifacts (compacted/*.json)
 ```
 
-1. **Raw Logs** -- complete, unmodified conversation transcripts stored as NDJSON. These are the source of truth and are never destroyed or modified.
-2. **Notes** -- key facts, decisions, and action items extracted from raw logs. Stored as NDJSON with timestamps and tags.
-3. **Summaries** -- human-readable Markdown documents that distill notes into concise overviews. Regenerated during compaction.
-4. **Compacted Artifacts** -- structured JSON containing the most important information in a compact format suitable for inclusion in prompts.
+### Raw Logs
+
+The complete conversation transcript stored as NDJSON. Every user message, assistant response, tool call, and tool result is recorded verbatim. Raw logs are append-only and never modified or deleted.
+
+### Notes
+
+Key facts, decisions, and actionable items extracted from raw logs. Notes are stored as NDJSON with metadata (timestamp, source, scope, tags). Extraction happens automatically after each conversation turn.
+
+### Summaries
+
+Human-readable Markdown summaries generated from notes. Summaries capture the essential context in a compact form suitable for inclusion in prompts. They are regenerated during compaction.
+
+### Compacted Artifacts
+
+Structured JSON artifacts that represent the fully compacted state of a memory scope. Compacted artifacts combine and deduplicate notes, resolve contradictions, and produce a minimal representation of accumulated knowledge.
 
 ## Memory Pipeline
 
-### Ingest Transcript
+### 1. Ingest Transcript
 
-After each conversation turn, the transcript entry is appended to the session's `transcript.ndjson`. This happens automatically and requires no user action.
+After each conversation turn, the new transcript entries are passed to the memory system. This happens automatically during chat and task execution.
 
-### Extract Notes
+### 2. Extract Notes
 
-Notes extraction reads recent transcript entries and identifies:
-- Key facts and statements
-- Decisions made
-- Action items and tasks
-- Code references and file paths
-- Error conditions and resolutions
+The memory module analyzes transcript entries and extracts structured notes:
 
-Extracted notes are appended to `notes.ndjson` in the appropriate memory scope.
+```json
+{
+  "timestamp": "2024-01-15T10:30:00Z",
+  "scope": "session",
+  "source": "session-abc123",
+  "type": "fact",
+  "content": "User prefers Python for scripting tasks",
+  "tags": ["preference", "python"]
+}
+```
 
-### Periodic Compaction
+Note types include: `fact`, `decision`, `action`, `preference`, `context`, and `observation`.
 
-Compaction runs on a schedule (or manually) and processes accumulated notes into compact artifacts:
+### 3. Periodic Compaction
 
-1. Read all notes from `notes.ndjson`
-2. Send notes to the memory module for analysis and compression
-3. Write `compacted.json` with structured, deduplicated information
-4. Generate `summary.md` with a human-readable overview
-5. Update the memory index
+Compaction runs on demand (`agent:memory:compact`) or during scheduled maintenance. The compaction process reads accumulated notes, merges related items, resolves conflicts, and produces a fresh compacted artifact and summary.
 
 ## Memory Scopes
 
 ### Global
 
-Stored in `writable/agent/memory/global/`. Contains knowledge that spans all sessions and tasks. Information promoted to global scope persists indefinitely.
+Persists across all sessions. Stores user preferences, frequently used patterns, and long-term context. Located at `writable/agent/memory/global/`.
 
 ### Session
 
-Stored in `writable/agent/memory/sessions/<session-id>/`. Contains knowledge specific to a single conversation session. Useful for maintaining context across a long conversation.
+Scoped to a single chat session. Stores conversation context, decisions made, and session-specific notes. Located at `writable/agent/memory/sessions/<session-id>/`.
 
 ### Module
 
-Stored in `writable/agent/memory/modules/<module-name>/`. Contains knowledge accumulated by a specific module across its invocations. For example, the coding module might accumulate project-specific patterns.
+Scoped to a specific module. Stores module-specific patterns and learned behaviors. Located at `writable/agent/memory/modules/<module-name>/`.
 
 ### Task
 
-Stored in `writable/agent/memory/tasks/<task-id>/`. Contains knowledge relevant to a specific background task. Useful for long-running tasks that need to track state across steps.
+Scoped to a single task. Stores task-specific context and intermediate results. Located at `writable/agent/memory/tasks/<task-id>/`.
 
 ## Compaction Process
 
-Compaction is the process of transforming raw notes into dense, useful artifacts:
+When compaction runs for a given scope:
 
-```
-notes.ndjson (may contain hundreds of entries)
-    │
-    ▼
-Memory module analyzes and deduplicates
-    │
-    ▼
-compacted.json (structured, compressed knowledge)
-    │
-    ▼
-summary.md (human-readable overview)
-    │
-    ▼
-Index updated with compaction metadata
-```
+1. **Read notes** -- All notes from `notes.ndjson` are loaded.
+2. **Load previous compacted state** -- The most recent compacted artifact (if any) is loaded as a baseline.
+3. **Merge and deduplicate** -- New notes are merged with the existing compacted state. Duplicate or superseded entries are removed.
+4. **Generate compacted artifact** -- A new JSON artifact is written to `compacted/` with a timestamped filename.
+5. **Generate summary** -- A Markdown summary is generated from the compacted artifact and written to `summary.md`.
+6. **Update index** -- The memory index is updated to point to the latest compacted artifact.
 
-During compaction:
-- Duplicate information is merged
-- Outdated information is flagged
-- Key facts are prioritized
-- The compacted artifact is sized to fit within prompt context limits
-
-## Raw Logs Are Never Destroyed
-
-Raw transcript logs (`transcript.ndjson`) and note logs (`notes.ndjson`) are append-only and permanent. Compaction creates new derived artifacts but never modifies or deletes source data. This ensures:
-
-- Complete audit trail
-- Ability to recompact with different strategies
-- Debugging and analysis of historical conversations
+Raw logs and notes are never destroyed during compaction. Only derived artifacts are regenerated.
 
 ## Commands
 
 ### `agent:memory:show`
 
-Display memory contents for a specified scope:
+Display memory contents for a given scope.
 
 ```bash
 # Show global memory summary
-php spark agent:memory:show global
+php spark agent:memory:show --scope=global
 
 # Show session memory
-php spark agent:memory:show session <session-id>
+php spark agent:memory:show --scope=session --id=abc123
 
-# Show module memory
-php spark agent:memory:show module coding
+# Show raw notes
+php spark agent:memory:show --scope=global --format=notes
 ```
 
 ### `agent:memory:compact`
 
-Manually trigger compaction for a scope:
+Run compaction on a memory scope.
 
 ```bash
 # Compact global memory
-php spark agent:memory:compact global
+php spark agent:memory:compact --scope=global
 
-# Compact a specific session's memory
-php spark agent:memory:compact session <session-id>
+# Compact a specific session
+php spark agent:memory:compact --scope=session --id=abc123
 
 # Compact all scopes
 php spark agent:memory:compact --all

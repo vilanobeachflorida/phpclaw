@@ -1,14 +1,19 @@
-# Model Routing
+# Routing
 
-PHPClaw uses role-based routing to assign models to different types of work. This allows flexible model allocation without hardcoding provider and model names throughout the codebase.
+## Overview
+
+PHPClaw uses role-based routing to assign AI requests to the appropriate provider and model. Roles are an abstraction layer between modules (which define what the agent does) and providers (which define where the request goes).
 
 ## Role-Based Model Assignment
 
-Every request to a model is associated with a role. The role determines which provider and model handle the request. This indirection means you can:
+Each role maps to a specific provider and model combination. When a module sends a request, it specifies its role. The ModelRouter resolves the role to a concrete provider and model.
 
-- Use a powerful model for coding tasks and a lightweight model for heartbeats
-- Switch providers for a role without changing any module configuration
-- Define fallback chains for reliability
+```
+Module (coding) ──► Role (coding) ──► Provider (ollama) + Model (codellama)
+Module (reasoning) ──► Role (reasoning) ──► Provider (chatgpt) + Model (gpt-4o)
+```
+
+This indirection allows changing which model handles a given type of work without modifying any module code.
 
 ## Role Definitions
 
@@ -19,148 +24,182 @@ Roles are defined in `writable/agent/config/roles.json`:
   "default": {
     "provider": "ollama",
     "model": "llama3",
-    "fallback": null
+    "description": "Default role for general conversation"
   },
   "coding": {
-    "provider": "chatgpt",
-    "model": "gpt-4o",
-    "fallback": "default",
-    "timeout": 120,
-    "max_retries": 3
+    "provider": "ollama",
+    "model": "codellama",
+    "description": "Code generation and engineering tasks",
+    "fallback": ["default"]
   },
   "reasoning": {
     "provider": "chatgpt",
     "model": "gpt-4o",
-    "fallback": "default"
+    "description": "Complex reasoning and analysis",
+    "fallback": ["default"]
   },
   "summarizer": {
     "provider": "ollama",
     "model": "llama3",
-    "fallback": null
+    "description": "Content summarization",
+    "fallback": ["default"]
   },
   "system": {
     "provider": "ollama",
     "model": "llama3",
-    "fallback": null,
-    "timeout": 10
+    "description": "System operations (heartbeat, health)",
+    "fallback": []
   },
-  "planning": {
+  "memory": {
+    "provider": "ollama",
+    "model": "llama3",
+    "description": "Memory extraction and compaction",
+    "fallback": ["default"]
+  },
+  "planner": {
     "provider": "chatgpt",
     "model": "gpt-4o",
-    "fallback": "default"
+    "description": "Task planning and decomposition",
+    "fallback": ["reasoning", "default"]
   },
-  "browsing": {
+  "browser": {
     "provider": "ollama",
     "model": "llama3",
-    "fallback": "default"
+    "description": "Web content processing",
+    "fallback": ["default"]
   },
-  "routing": {
-    "provider": "ollama",
-    "model": "llama3",
-    "fallback": "default"
+  "tool_router": {
+    "provider": "chatgpt",
+    "model": "gpt-4o",
+    "description": "Multi-tool coordination",
+    "fallback": ["reasoning", "default"]
   }
 }
 ```
 
-### Role Fields
-
-- **provider** -- the primary provider for this role.
-- **model** -- the primary model for this role.
-- **fallback** -- name of another role to try if the primary fails (null means no fallback).
-- **timeout** -- request timeout in seconds (overrides provider default).
-- **max_retries** -- maximum retry attempts before falling back.
-
 ## Module Role Assignment and Overrides
 
-Modules declare their role in `modules.json`. The routing resolution follows this priority:
+Modules specify their role in `modules.json`. The role determines the default routing path. Modules can also specify `provider_override` and `model_override` to bypass role-based routing entirely.
 
-1. **Module provider/model override** -- if the module specifies `provider` and/or `model` directly, those are used.
-2. **Role assignment** -- the module's `role` is looked up in `roles.json` to find the provider and model.
-3. **Default role** -- if the module's role is not found in `roles.json`, the `default` role is used.
+Resolution order:
+
+1. Module `provider_override` / `model_override` (if set, used directly)
+2. Module `role` resolved through `roles.json`
+3. Fallback chain (if the primary role's provider is unavailable)
+4. `default` role (ultimate fallback)
 
 ## Fallback Chains
 
-When a request fails (timeout, API error, rate limit), the router follows the fallback chain:
+Each role can define a `fallback` array listing other roles to try if the primary provider/model is unavailable (health check fails, provider disabled, model not found).
+
+Fallback resolution:
 
 ```
-coding role (chatgpt/gpt-4o)
-    │ fails
-    ▼
-default role (ollama/llama3)
-    │ fails
-    ▼
-Error returned to caller
+Role: planner
+  Primary: chatgpt / gpt-4o
+  │
+  ├── (unavailable) ──► Fallback 1: reasoning
+  │                        chatgpt / gpt-4o
+  │                        │
+  │                        └── (unavailable) ──► Fallback 2: default
+  │                                                ollama / llama3
+  │
+  └── (available) ──► Use chatgpt / gpt-4o
 ```
 
-Fallback chains are followed automatically. Each fallback attempt uses the timeout and retry settings of the target role. Circular fallback references are detected and prevented.
+An empty fallback array (`"fallback": []`) means no fallback -- if the primary is unavailable, the request fails.
 
 ## Timeout and Retry Configuration
 
-Timeouts and retries can be configured at multiple levels:
+Timeout and retry settings are defined per-provider in `providers.json` and can be overridden per-role in `roles.json`:
 
-| Level | Setting | Description |
+```json
+{
+  "coding": {
+    "provider": "ollama",
+    "model": "codellama",
+    "timeout": 180,
+    "retries": 3,
+    "retry_delay": 2,
+    "fallback": ["default"]
+  }
+}
+```
+
+| Setting | Default | Description |
 |---|---|---|
-| Provider | `timeout` in `providers.json` | Default timeout for all requests to this provider |
-| Role | `timeout` in `roles.json` | Override timeout for requests using this role |
-| Role | `max_retries` in `roles.json` | Retry count before falling back |
-| Provider | `retry.max_attempts` in `providers.json` | Provider-level retry count |
-| Provider | `retry.delay_ms` in `providers.json` | Delay between retries in milliseconds |
+| `timeout` | 120 | Request timeout in seconds |
+| `retries` | 2 | Number of retry attempts on failure |
+| `retry_delay` | 1 | Delay between retries in seconds |
 
-Role-level settings take precedence over provider-level settings.
+Retries are attempted on transient errors (timeouts, connection failures, 5xx responses). Non-transient errors (4xx, invalid response) are not retried.
 
 ## ModelRouter Class
 
-The `ModelRouter` class handles all routing logic:
+The `ModelRouter` class implements the routing logic:
 
 ```php
 class ModelRouter
 {
-    public function route(string $role, array $messages, array $options = []): array;
-    public function resolveProvider(string $role): ProviderInterface;
-    public function resolveModel(string $role): string;
-    public function getEffectiveConfig(string $role): array;
+    public function resolve(string $role, ?string $providerOverride = null, ?string $modelOverride = null): array;
+    public function getProviderForRole(string $role): ProviderInterface;
+    public function getModelForRole(string $role): string;
+    public function resolveWithFallback(string $role): array;
 }
 ```
 
-The `route()` method is the primary entry point. It resolves the provider and model, sends the request, handles retries, and follows fallback chains if needed.
+The `resolve()` method returns an array with `provider` and `model` keys:
 
-## Routing Examples
+```php
+$route = $router->resolve('coding');
+// ['provider' => 'ollama', 'model' => 'codellama']
 
-### Basic Role Routing
-
-A coding module sends a request:
-
-```
-Module: coding (role: coding)
-    → roles.json lookup: coding → chatgpt / gpt-4o
-    → Request sent to ChatGPT with gpt-4o
-    → Response returned
+$route = $router->resolve('coding', 'chatgpt', 'gpt-4o');
+// ['provider' => 'chatgpt', 'model' => 'gpt-4o']  (override)
 ```
 
-### Fallback on Failure
+## Examples
 
-ChatGPT is unreachable:
+### Default Chat Routing
 
-```
-Module: coding (role: coding)
-    → roles.json lookup: coding → chatgpt / gpt-4o
-    → Request to ChatGPT fails (timeout)
-    → Retry 1 fails
-    → Retry 2 fails
-    → Fallback: coding.fallback = "default"
-    → roles.json lookup: default → ollama / llama3
-    → Request sent to Ollama with llama3
-    → Response returned
-```
-
-### Module Override
-
-Heartbeat module with explicit provider:
+User starts a chat without specifying a module. The `default` role is used:
 
 ```
-Module: heartbeat (role: system, provider: ollama, model: llama3)
-    → Module override detected
-    → Skip roles.json lookup
-    → Request sent directly to Ollama with llama3
-    → Response returned
+User message ──► default role ──► ollama / llama3
+```
+
+### Module-Specific Routing
+
+User switches to the coding module with `/module coding`:
+
+```
+User message ──► coding module ──► coding role ──► ollama / codellama
+```
+
+### Fallback in Action
+
+The planner module tries to use ChatGPT, but the API is down:
+
+```
+User message ──► planner module ──► planner role ──► chatgpt / gpt-4o (FAIL)
+                                                 ──► reasoning role ──► chatgpt / gpt-4o (FAIL)
+                                                 ──► default role ──► ollama / llama3 (OK)
+```
+
+### Override in Action
+
+A module is configured with a provider override:
+
+```json
+{
+  "coding": {
+    "role": "coding",
+    "provider_override": "chatgpt",
+    "model_override": "gpt-4o"
+  }
+}
+```
+
+```
+User message ──► coding module ──► chatgpt / gpt-4o (override, skip role resolution)
 ```

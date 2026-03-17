@@ -1,61 +1,69 @@
 # Task System
 
-PHPClaw supports background tasks that run asynchronously through the service loop. Tasks are queued, processed, and tracked entirely through the file system.
+## Overview
+
+PHPClaw supports background task execution through a queue-based system. Tasks are processed by the service loop and can be monitored, tailed, and cancelled from the CLI.
 
 ## Task Lifecycle
 
 ```
 queued ──► running ──► completed
-                  ├──► failed
-                  └──► cancelled
+              │
+              ├──► failed
+              │
+              └──► cancelled
 ```
 
-- **queued** -- task has been created and is waiting for the service loop to pick it up.
-- **running** -- task is actively being processed by the service loop.
-- **completed** -- task finished successfully and output is available.
-- **failed** -- task encountered an error. Error details are recorded in the task metadata.
-- **cancelled** -- task was manually cancelled by the user before completion.
+### States
+
+- **queued** -- Task has been created and is waiting for the service loop to pick it up.
+- **running** -- Task is actively being executed by the service loop.
+- **completed** -- Task finished successfully. Output and artifacts are available.
+- **failed** -- Task encountered an unrecoverable error. Error details are recorded.
+- **cancelled** -- Task was cancelled by the user before completion.
 
 ## Task Storage
 
-Each task is stored in its own directory under `writable/agent/tasks/<task-id>/`:
+Each task has its own directory under `writable/agent/tasks/<task-id>/`:
 
 ```
 <task-id>/
-├── task.json          # Task metadata, status, timestamps, configuration
-├── steps.ndjson       # Append-only log of execution steps
-├── progress.ndjson    # Append-only log of progress updates
-├── messages.ndjson    # Append-only log of model messages
-├── output.md          # Final output in Markdown format
-├── artifacts/         # Files produced by the task
-└── checkpoints/       # State snapshots for resumability
+├── task.json           # Task metadata and current state
+├── steps.ndjson        # Step-by-step execution log
+├── progress.ndjson     # Progress updates (percentage, status messages)
+├── messages.ndjson     # AI messages generated during execution
+├── output.md           # Final human-readable output
+├── artifacts/          # Files produced by the task
+└── checkpoints/        # Resumable state snapshots
 ```
 
 ### task.json
 
-Contains the task definition and current state:
+Contains task metadata:
 
 ```json
 {
-  "id": "task_20250115_c7d9e4",
-  "name": "Analyze codebase",
+  "id": "task-abc123",
   "status": "running",
+  "type": "coding",
+  "description": "Refactor the authentication module",
   "module": "coding",
-  "created_at": "2025-01-15T10:00:00Z",
-  "started_at": "2025-01-15T10:00:05Z",
+  "provider": "ollama",
+  "model": "llama3",
+  "created_at": "2024-01-15T10:00:00Z",
+  "started_at": "2024-01-15T10:00:05Z",
   "completed_at": null,
-  "error": null,
-  "params": {}
+  "error": null
 }
 ```
 
 ### steps.ndjson
 
-Each step of execution is logged as a JSON line:
+Each line records a step in task execution:
 
 ```json
-{"ts":"2025-01-15T10:00:05Z","step":1,"action":"scan_files","status":"completed"}
-{"ts":"2025-01-15T10:00:12Z","step":2,"action":"analyze_patterns","status":"running"}
+{"step": 1, "action": "analyze", "input": "...", "output": "...", "timestamp": "..."}
+{"step": 2, "action": "tool_call", "tool": "file_read", "args": {...}, "result": {...}, "timestamp": "..."}
 ```
 
 ### progress.ndjson
@@ -63,47 +71,47 @@ Each step of execution is logged as a JSON line:
 Progress updates for monitoring:
 
 ```json
-{"ts":"2025-01-15T10:00:10Z","percent":25,"message":"Scanned 50 of 200 files"}
-{"ts":"2025-01-15T10:00:15Z","percent":50,"message":"Analysis in progress"}
+{"percent": 25, "message": "Analyzing existing code", "timestamp": "..."}
+{"percent": 50, "message": "Generating refactored implementation", "timestamp": "..."}
 ```
 
 ### messages.ndjson
 
-Model interactions during task execution, stored in the same format as session transcripts.
+All AI messages generated during the task, in transcript format.
 
 ### output.md
 
-The final human-readable output of the task, written when the task completes.
+The final output of the task in Markdown format. This is what gets displayed when viewing a completed task.
 
 ### artifacts/
 
-Any files produced by the task (generated code, reports, exports) are stored here.
+Any files the task produces (generated code, reports, etc.) are stored here.
 
 ### checkpoints/
 
-State snapshots that allow task resumption if the service restarts. Each checkpoint is a JSON file with the task's internal state at that point.
+State snapshots that allow a task to be resumed after interruption. Each checkpoint is a JSON file capturing the task state at a point in time.
 
 ## Creating Tasks
 
-Tasks are created through the chat interface or programmatically:
+Tasks are typically created from the chat REPL or programmatically:
 
 ```bash
-# From the chat REPL
-> /tasks create "Analyze the project structure"
+# From chat, tasks may be created by the agent when handling complex requests
+# The agent determines when a task should be backgrounded
 
-# Programmatically via the TaskManager API
-$taskManager->create('Analyze the project structure', 'coding', $params);
+# Tasks can also be queued from the service loop for scheduled operations
 ```
 
-## Monitoring Progress
+## Monitoring Tasks
 
 ### List Tasks
 
 ```bash
 php spark agent:tasks
-```
 
-Displays all tasks with their current status, creation time, and a brief description.
+# Filter by status
+php spark agent:tasks --status=running
+```
 
 ### Show Task Details
 
@@ -111,7 +119,7 @@ Displays all tasks with their current status, creation time, and a brief descrip
 php spark agent:task:show <task-id>
 ```
 
-Displays full task metadata, recent steps, and progress information.
+Displays the task metadata, current progress, and recent steps.
 
 ### Tail Task Output
 
@@ -119,7 +127,7 @@ Displays full task metadata, recent steps, and progress information.
 php spark agent:task:tail <task-id>
 ```
 
-Streams live output from a running task, similar to `tail -f`. Displays new steps, progress updates, and messages as they are appended.
+Follows the task output in real time, similar to `tail -f`. Shows new steps, progress updates, and messages as they are appended.
 
 ### Cancel a Task
 
@@ -127,28 +135,17 @@ Streams live output from a running task, similar to `tail -f`. Displays new step
 php spark agent:task:cancel <task-id>
 ```
 
-Cancels a queued or running task. If the task is running, the service loop will stop it at the next checkpoint opportunity. The task status is set to `cancelled`.
+Sets the task status to `cancelled`. If the task is currently running, the service loop will stop execution at the next check point.
 
 ## Service Loop Task Processing
 
-The service loop picks up queued tasks in FIFO order:
+The service loop processes tasks in the following order:
 
-1. Read `tasks/index.json` for tasks with status `queued`
-2. Select the oldest queued task
-3. Set status to `running` in `task.json`
-4. Execute the task using the configured module
-5. Log steps and progress as execution proceeds
-6. On completion, write `output.md` and set status to `completed`
-7. On error, record the error in `task.json` and set status to `failed`
-8. Update `tasks/index.json`
+1. **Check queue** -- Read `tasks/index.json` for tasks in `queued` state.
+2. **Pick task** -- Select the oldest queued task (FIFO ordering).
+3. **Transition to running** -- Update task status and `started_at` timestamp.
+4. **Execute steps** -- Run the task through its module, logging steps and progress.
+5. **Handle completion** -- On success, write `output.md`, update status to `completed`. On error, record the error and set status to `failed`.
+6. **Update index** -- Reflect the new status in `tasks/index.json`.
 
-Only one task runs at a time. This keeps the system simple and avoids resource contention.
-
-## CLI Commands
-
-| Command | Description |
-|---|---|
-| `agent:tasks` | List all tasks with status |
-| `agent:task:show <id>` | Show task details |
-| `agent:task:tail <id>` | Tail live output of a running task |
-| `agent:task:cancel <id>` | Cancel a queued or running task |
+The service loop processes one task at a time. New tasks remain queued until the current task finishes.

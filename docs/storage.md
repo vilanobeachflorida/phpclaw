@@ -1,49 +1,61 @@
 # Storage
 
-All runtime data is stored under `writable/agent/`. No database is used. The filesystem is the single source of truth.
+## Overview
+
+All PHPClaw runtime data is stored under `writable/agent/`. No database is used. Every piece of state -- configuration, sessions, tasks, memory, cache -- is a file on disk.
 
 ## Directory Tree
 
 ```
 writable/agent/
-├── config/                  # Configuration files
-│   ├── providers.json       # Provider definitions and credentials
-│   ├── roles.json           # Role-to-model mapping
-│   ├── modules.json         # Module definitions
-│   └── service.json         # Service loop configuration
-├── sessions/                # Chat sessions
-│   ├── index.json           # Session manifest (id, name, timestamps)
-│   └── <session-id>/        # One directory per session
-│       ├── session.json     # Session metadata
-│       └── transcript.ndjson # Append-only conversation log
-├── tasks/                   # Background tasks
-│   ├── index.json           # Task manifest
-│   └── <task-id>/           # One directory per task
-│       ├── task.json        # Task metadata and status
-│       ├── steps.ndjson     # Execution steps log
-│       ├── progress.ndjson  # Progress updates log
-│       ├── messages.ndjson  # Model messages log
-│       ├── output.md        # Final output (Markdown)
-│       ├── artifacts/       # Task-produced files
-│       └── checkpoints/     # Resumable state snapshots
-├── memory/                  # Memory system
-│   ├── global/              # Global memory scope
-│   │   ├── notes.ndjson     # Extracted notes
-│   │   ├── summary.md       # Human-readable summary
-│   │   └── compacted.json   # Compacted artifact
-│   ├── sessions/            # Per-session memory
-│   ├── modules/             # Per-module memory
-│   └── tasks/               # Per-task memory
-├── cache/                   # Response cache
-│   ├── index.json           # Cache entry manifest
-│   └── entries/             # Cached response files
-├── logs/                    # Application logs
-│   ├── agent.log            # General agent log
-│   └── service.log          # Service loop log
-├── prompts/                 # System and module prompts
-│   ├── system/              # System-level prompts
-│   │   └── default.md       # Default system prompt
-│   └── modules/             # Module-specific prompts
+├── config/                     # Configuration files
+│   ├── providers.json          # Provider definitions and credentials
+│   ├── roles.json              # Role-to-model mappings
+│   ├── modules.json            # Module definitions
+│   └── service.json            # Service loop configuration
+│
+├── sessions/                   # Chat sessions
+│   ├── index.json              # Session index (ID, created, last active)
+│   └── <session-id>/           # Individual session directory
+│       ├── session.json        # Session metadata and state
+│       ├── transcript.ndjson   # Append-only conversation log
+│       └── memory/             # Session-scoped memory
+│           ├── notes.ndjson    # Extracted notes
+│           ├── summary.md      # Current summary
+│           └── compacted/      # Compaction artifacts
+│
+├── tasks/                      # Background tasks
+│   ├── index.json              # Task index (ID, status, created)
+│   └── <task-id>/              # Individual task directory
+│       ├── task.json           # Task metadata and state
+│       ├── steps.ndjson        # Step execution log
+│       ├── progress.ndjson     # Progress updates
+│       ├── messages.ndjson     # Messages generated during task
+│       ├── output.md           # Final task output
+│       ├── artifacts/          # Files produced by the task
+│       └── checkpoints/        # Resumable state snapshots
+│
+├── memory/                     # Memory system
+│   ├── global/                 # Global memory scope
+│   │   ├── notes.ndjson        # Global notes
+│   │   ├── summary.md          # Global summary
+│   │   └── compacted/          # Compacted artifacts
+│   ├── sessions/               # Per-session memory
+│   ├── modules/                # Per-module memory
+│   └── tasks/                  # Per-task memory
+│
+├── cache/                      # Response and artifact cache
+│   ├── index.json              # Cache index with TTL metadata
+│   └── entries/                # Cached data files
+│
+├── logs/                       # Runtime logs
+│   ├── service.log             # Service loop log
+│   └── errors.log              # Error log
+│
+├── prompts/                    # System and module prompts
+│   ├── system/                 # System-level prompts
+│   │   └── default.md          # Default system prompt
+│   └── modules/                # Per-module prompts
 │       ├── heartbeat.md
 │       ├── reasoning.md
 │       ├── coding.md
@@ -52,64 +64,61 @@ writable/agent/
 │       ├── planner.md
 │       ├── browser.md
 │       └── tool_router.md
-└── templates/               # Scaffold templates
-    ├── tool.php.tpl          # Tool scaffold template
-    └── provider.php.tpl      # Provider scaffold template
+│
+└── templates/                  # Scaffolding templates
+    ├── tool.php.tpl            # Tool class template
+    └── provider.php.tpl        # Provider class template
 ```
 
 ## File Formats
 
 ### JSON (`.json`)
 
-Used for structured data that is read and written as a whole: configuration, metadata, manifests, compacted artifacts. Files are pretty-printed for human readability.
+Used for structured data that is read and written as a whole: configuration files, metadata, indexes, and state snapshots. Files are pretty-printed for readability.
 
 ### NDJSON (`.ndjson`)
 
-Newline-delimited JSON. Used for append-only logs: transcripts, task steps, progress updates, memory notes. Each line is a self-contained JSON object with a timestamp. Files are only appended to, never rewritten.
-
-Example NDJSON entry:
-```json
-{"ts":"2025-01-15T10:30:00Z","type":"user","content":"Hello, agent."}
-```
+Newline-delimited JSON. Used for append-only logs: transcripts, step logs, progress updates, and notes. Each line is a self-contained JSON object. This format supports efficient appending without reading the entire file.
 
 ### Markdown (`.md`)
 
-Used for human-readable summaries and final outputs. Memory summaries and task outputs are written as Markdown so they can be read directly in any text editor or terminal.
+Used for human-readable summaries and output: memory summaries, task output, and prompts. These files are derived from structured data and can be regenerated.
 
 ### Plain Text (`.log`)
 
-Used for application logs. Standard log format with timestamps and severity levels.
+Used for runtime logs: service log and error log. Standard line-oriented log format with timestamps.
 
 ## Naming Conventions
 
-- **Session IDs** -- `ses_<timestamp>_<random>` (e.g., `ses_20250115_a3f2b1`)
-- **Task IDs** -- `task_<timestamp>_<random>` (e.g., `task_20250115_c7d9e4`)
-- **Cache keys** -- SHA-256 hash of the request parameters
-- **Lock files** -- `.lock` suffix appended to the resource filename (e.g., `session.json.lock`)
+- **IDs** are generated as lowercase UUID-v4 strings (e.g., `a3f8b2c1-4d5e-6f7a-8b9c-0d1e2f3a4b5c`).
+- **Directories** for sessions and tasks are named by their ID.
+- **Timestamps** in log entries use ISO 8601 format (`2024-01-15T10:30:00Z`).
+- **Config files** use descriptive names matching their purpose.
 
 ## Lock Files
 
-Lock files prevent concurrent writes to the same resource. A lock file contains the PID of the holding process and a timestamp. Stale locks (where the PID no longer exists) are automatically cleaned up.
+Write operations that modify shared state use `.lock` files to prevent concurrent corruption. A lock file is created before writing and removed after the write completes. The locking mechanism uses PHP's `flock()` for advisory locking.
 
-Lock files are used for:
-- Session writes
-- Task status transitions
-- Memory compaction
-- Cache writes
+Lock files are named by appending `.lock` to the target file path:
+
+```
+sessions/index.json      -> sessions/index.json.lock
+tasks/index.json         -> tasks/index.json.lock
+```
 
 ## Index and Manifest Pattern
 
-Collections (sessions, tasks, cache) use an `index.json` manifest file that lists all entries with minimal metadata (ID, status, timestamps). This allows fast listing without scanning individual directories.
+Collection directories (sessions, tasks, cache) maintain an `index.json` file that serves as a manifest. The index contains a lightweight summary of each item (ID, status, timestamps) to avoid scanning individual directories for listing operations.
 
-The index is updated whenever an entry is created, modified, or removed. If the index becomes corrupted, it can be rebuilt by scanning the directory contents.
+The index is updated whenever an item is created, modified, or removed. If the index becomes inconsistent, it can be rebuilt by scanning the directory contents.
 
 ## No Database Rule
 
-PHPClaw deliberately avoids any database dependency. All state is in flat files. This provides:
+PHPClaw deliberately avoids database dependencies. The file-based approach provides:
 
-- **Portability** -- copy the directory and everything moves with it.
-- **Inspectability** -- use `cat`, `jq`, `less` to examine any state.
-- **Simplicity** -- no schema migrations, no connection management, no query language.
+- **Portability** -- copy the `writable/agent/` directory to move all state.
+- **Inspectability** -- read any file directly with standard tools.
+- **Simplicity** -- no connection strings, migrations, or schema management.
 - **Reliability** -- no database server to crash or corrupt.
 
-For the scale PHPClaw targets (single user, single machine), file-based storage is both sufficient and preferable.
+For the workload PHPClaw handles (single-user, moderate throughput), file-based storage is sufficient and preferable to the complexity of a database.
