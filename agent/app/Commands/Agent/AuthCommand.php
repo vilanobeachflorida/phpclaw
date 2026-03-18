@@ -143,30 +143,12 @@ class AuthCommand extends BaseCommand
     private function oauthLogin(string $provider): void
     {
         $storage = new FileStorage();
-        $config = new ConfigLoader($storage);
         $oauth = new OAuthManager($storage);
 
-        $providersConfig = $config->get('providers', 'providers', []);
-        $providerConfig = $providersConfig[$provider] ?? null;
-
-        if (!$providerConfig) {
-            $this->ui->error("Provider not found: {$provider}");
-            $this->ui->dim('Available: ' . implode(', ', array_keys($providersConfig)));
-            return;
-        }
-
-        $oauthConfig = $providerConfig['oauth'] ?? [];
-        if (empty($oauthConfig['client_id'])) {
-            $this->ui->error("OAuth not configured for {$provider}.");
-            $this->ui->newLine();
-            $this->ui->infoBox(
-                "To enable OAuth, add to providers.json:",
-                "  \"{$provider}\": { \"oauth\": {",
-                "    \"enabled\": true,",
-                "    \"client_id\": \"your-client-id\"",
-                "  }}",
-            );
-
+        // Check if this provider supports OAuth at all
+        if (!$oauth->hasOAuthSupport($provider)) {
+            $this->ui->error("OAuth is not available for {$provider}");
+            $this->ui->dim('Supported: chatgpt, claude_api');
             $this->ui->newLine();
             if ($this->ui->confirm('Paste a token manually instead?', false)) {
                 $this->manualToken($provider);
@@ -174,22 +156,16 @@ class AuthCommand extends BaseCommand
             return;
         }
 
-        // Choose flow
-        $choice = $this->ui->menu("Login to {$provider}", [
-            ['label' => 'Browser login',  'description' => 'Authorization Code + PKCE (recommended)'],
-            ['label' => 'Paste token',    'description' => 'Enter an access token manually'],
-        ]);
-
-        if ($choice === null) return;
-
-        if ($choice === 1) {
-            $this->manualToken($provider);
+        // Resolve OAuth config — uses built-in client ID automatically
+        $oauthConfig = $oauth->resolveOAuthConfig($provider);
+        if (!$oauthConfig) {
+            $this->ui->error("Could not resolve OAuth config for {$provider}");
             return;
         }
 
-        // Run browser flow using the shared browserLogin method
         $this->ui->newLine();
-        $this->ui->divider('Browser Login', 'bright_cyan');
+        $this->ui->info("Signing in to {$provider}...");
+        $this->ui->dim('This will open your browser for authorization.');
         $this->ui->newLine();
 
         $result = $oauth->browserLogin($provider, $oauthConfig, [

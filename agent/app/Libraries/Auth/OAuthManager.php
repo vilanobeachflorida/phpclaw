@@ -15,6 +15,33 @@ class OAuthManager
 {
     private FileStorage $storage;
 
+    /**
+     * Built-in OAuth client IDs for PHPClaw.
+     *
+     * These are PHPClaw's own registered OAuth applications.
+     * Users don't need to create their own — just authorize.
+     *
+     * Can be overridden via environment variables:
+     *   PHPCLAW_OPENAI_CLIENT_ID
+     *   PHPCLAW_OPENAI_CLIENT_SECRET
+     *   PHPCLAW_ANTHROPIC_CLIENT_ID
+     *   PHPCLAW_ANTHROPIC_CLIENT_SECRET
+     *
+     * Or via the provider's oauth.client_id in providers.json.
+     */
+    private const BUILTIN_CLIENTS = [
+        'chatgpt' => [
+            'client_id' => 'phpclaw-openai-cli',
+            'client_id_env' => 'PHPCLAW_OPENAI_CLIENT_ID',
+            'client_secret_env' => 'PHPCLAW_OPENAI_CLIENT_SECRET',
+        ],
+        'claude_api' => [
+            'client_id' => 'phpclaw-anthropic-cli',
+            'client_id_env' => 'PHPCLAW_ANTHROPIC_CLIENT_ID',
+            'client_secret_env' => 'PHPCLAW_ANTHROPIC_CLIENT_SECRET',
+        ],
+    ];
+
     /** Known OAuth endpoints for supported providers. */
     private static array $providerEndpoints = [
         'chatgpt' => [
@@ -45,6 +72,56 @@ class OAuthManager
     {
         $this->storage = $storage ?? new FileStorage();
         $this->storage->ensureDir($this->storage->path('config', 'oauth'));
+    }
+
+    /**
+     * Resolve the OAuth client config for a provider.
+     *
+     * Priority:
+     *   1. Config from providers.json (oauth.client_id)
+     *   2. Environment variable override (PHPCLAW_*_CLIENT_ID)
+     *   3. Built-in PHPClaw client ID
+     *
+     * Returns ['client_id' => '...', 'client_secret' => '...'] or null.
+     */
+    public function resolveOAuthConfig(string $provider, array $configOauth = []): ?array
+    {
+        $builtin = self::BUILTIN_CLIENTS[$provider] ?? null;
+
+        // 1. Explicit config
+        $clientId = $configOauth['client_id'] ?? null;
+        $clientSecret = $configOauth['client_secret'] ?? null;
+
+        // 2. Environment variable override
+        if (empty($clientId) && $builtin) {
+            $envId = getenv($builtin['client_id_env'] ?? '');
+            if ($envId) $clientId = $envId;
+        }
+        if (empty($clientSecret) && $builtin) {
+            $envSecret = getenv($builtin['client_secret_env'] ?? '');
+            if ($envSecret) $clientSecret = $envSecret;
+        }
+
+        // 3. Built-in default
+        if (empty($clientId) && $builtin) {
+            $clientId = $builtin['client_id'];
+        }
+
+        if (empty($clientId)) return null;
+
+        return [
+            'enabled' => true,
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret ?? '',
+        ];
+    }
+
+    /**
+     * Check if a provider has OAuth support (built-in or configured).
+     */
+    public function hasOAuthSupport(string $provider): bool
+    {
+        return isset(self::BUILTIN_CLIENTS[$provider]) || isset(self::$providerEndpoints[$provider]);
     }
 
     /**
@@ -310,8 +387,17 @@ class OAuthManager
      *   'promptPaste'  => fn(): ?string                  — ask user to paste redirect URL (fallback)
      *   'onExchanging' => fn()                           — show "exchanging code"
      */
-    public function browserLogin(string $provider, array $oauthConfig, array $callbacks = []): array
+    public function browserLogin(string $provider, array $oauthConfig = [], array $callbacks = []): array
     {
+        // Resolve OAuth config — use built-in client IDs if not provided
+        if (empty($oauthConfig['client_id'])) {
+            $resolved = $this->resolveOAuthConfig($provider, $oauthConfig);
+            if (!$resolved) {
+                return ['success' => false, 'error' => "No OAuth client ID available for {$provider}"];
+            }
+            $oauthConfig = array_merge($oauthConfig, $resolved);
+        }
+
         $pkce = $this->generatePKCE();
         $state = bin2hex(random_bytes(16));
 
