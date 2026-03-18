@@ -145,22 +145,33 @@ class AuthCommand extends BaseCommand
         $storage = new FileStorage();
         $oauth = new OAuthManager($storage);
 
-        // Check if this provider supports OAuth at all
-        if (!$oauth->hasOAuthSupport($provider)) {
-            $this->ui->error("OAuth is not available for {$provider}");
-            $this->ui->dim('Supported: chatgpt, claude_api');
-            $this->ui->newLine();
-            if ($this->ui->confirm('Paste a token manually instead?', false)) {
-                $this->manualToken($provider);
-            }
+        // Claude uses setup-token, not browser OAuth
+        if ($oauth->hasSetupTokenSupport($provider)) {
+            $this->setupTokenLogin($provider);
             return;
         }
 
-        // Resolve OAuth config — uses built-in client ID automatically
-        $oauthConfig = $oauth->resolveOAuthConfig($provider);
-        if (!$oauthConfig) {
-            $this->ui->error("Could not resolve OAuth config for {$provider}");
+        // Check if this provider supports browser OAuth
+        if (!$oauth->hasOAuthSupport($provider)) {
+            $this->ui->error("OAuth is not available for {$provider}");
+            $this->ui->dim('Supported: chatgpt (browser OAuth), claude_api (setup-token)');
             return;
+        }
+
+        // Resolve OAuth config
+        $config = new ConfigLoader($storage);
+        $providersConfig = $config->get('providers', 'providers', []);
+        $oauthConfig = $oauth->resolveOAuthConfig($provider, $providersConfig[$provider]['oauth'] ?? []);
+
+        if (!$oauthConfig) {
+            $this->ui->infoBox(
+                "OAuth requires a Client ID for {$provider}.",
+                'Set PHPCLAW_OPENAI_CLIENT_ID in your environment,',
+                'or configure oauth.client_id in providers.json.'
+            );
+            $clientId = $this->ui->prompt('OAuth Client ID');
+            if (!$clientId) return;
+            $oauthConfig = ['enabled' => true, 'client_id' => $clientId, 'client_secret' => ''];
         }
 
         $this->ui->newLine();
@@ -262,6 +273,54 @@ class AuthCommand extends BaseCommand
                 $storage->writeJson('config/providers.json', ['providers' => $providersConfig]);
                 $this->ui->success("OAuth enabled for {$provider}");
             }
+        }
+    }
+
+    /**
+     * Claude setup-token login flow.
+     * User runs `claude setup-token` and pastes the result.
+     */
+    private function setupTokenLogin(string $provider): void
+    {
+        $storage = new FileStorage();
+        $oauth = new OAuthManager($storage);
+
+        $this->ui->newLine();
+        $this->ui->infoBox(
+            'Claude uses a setup token from Claude Code CLI.',
+            'This uses your Claude Pro or Max subscription.',
+            '',
+            'Run this in another terminal:',
+            '  claude setup-token',
+        );
+
+        $this->ui->newLine();
+        $token = $this->ui->prompt('Paste your setup token', '', true);
+        if (!$token) {
+            $this->ui->warn('No token provided');
+            return;
+        }
+
+        $oauth->storeSetupToken($provider, $token);
+
+        // Enable OAuth in config
+        $config = new ConfigLoader($storage);
+        $providersConfig = $config->get('providers', 'providers', []);
+        if (isset($providersConfig[$provider])) {
+            $providersConfig[$provider]['enabled'] = true;
+            $providersConfig[$provider]['oauth'] = ['enabled' => true];
+            $storage->writeJson('config/providers.json', ['providers' => $providersConfig]);
+        }
+
+        $this->ui->newLine();
+        $info = $oauth->getTokenInfo($provider);
+        if ($info) {
+            $this->ui->successBox(
+                "Claude subscription auth configured!",
+                'Token: ' . ($info['token_preview'] ?? '****'),
+            );
+        } else {
+            $this->ui->success("Setup token stored for {$provider}");
         }
     }
 

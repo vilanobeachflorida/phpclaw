@@ -18,53 +18,25 @@ class OAuthManager
     /**
      * Built-in OAuth client IDs for PHPClaw.
      *
-     * These are PHPClaw's own registered OAuth applications.
-     * Users don't need to create their own — just authorize.
-     *
-     * Can be overridden via environment variables:
-     *   PHPCLAW_OPENAI_CLIENT_ID
-     *   PHPCLAW_OPENAI_CLIENT_SECRET
-     *   PHPCLAW_ANTHROPIC_CLIENT_ID
-     *   PHPCLAW_ANTHROPIC_CLIENT_SECRET
-     *
-     * Or via the provider's oauth.client_id in providers.json.
+     * Overridable via environment variables or providers.json.
+     * If no client ID is configured anywhere, the user will be
+     * prompted during setup.
      */
     private const BUILTIN_CLIENTS = [
         'chatgpt' => [
-            'client_id' => 'phpclaw-openai-cli',
             'client_id_env' => 'PHPCLAW_OPENAI_CLIENT_ID',
             'client_secret_env' => 'PHPCLAW_OPENAI_CLIENT_SECRET',
-        ],
-        'claude_api' => [
-            'client_id' => 'phpclaw-anthropic-cli',
-            'client_id_env' => 'PHPCLAW_ANTHROPIC_CLIENT_ID',
-            'client_secret_env' => 'PHPCLAW_ANTHROPIC_CLIENT_SECRET',
         ],
     ];
 
     /** Known OAuth endpoints for supported providers. */
     private static array $providerEndpoints = [
         'chatgpt' => [
-            'authorize_url' => 'https://auth.openai.com/authorize',
+            'authorize_url' => 'https://auth.openai.com/oauth/authorize',
             'token_url' => 'https://auth.openai.com/oauth/token',
             'device_url' => null,
             'scopes' => 'openid profile email',
             'audience' => 'https://api.openai.com/v1',
-        ],
-        'claude_api' => [
-            'authorize_url' => 'https://console.anthropic.com/oauth/authorize',
-            'token_url' => 'https://console.anthropic.com/oauth/token',
-            'device_url' => null,
-            'scopes' => '',
-            'audience' => '',
-        ],
-        // Legacy alias
-        'claude' => [
-            'authorize_url' => 'https://console.anthropic.com/oauth/authorize',
-            'token_url' => 'https://console.anthropic.com/oauth/token',
-            'device_url' => null,
-            'scopes' => '',
-            'audience' => '',
         ],
     ];
 
@@ -102,11 +74,6 @@ class OAuthManager
             if ($envSecret) $clientSecret = $envSecret;
         }
 
-        // 3. Built-in default
-        if (empty($clientId) && $builtin) {
-            $clientId = $builtin['client_id'];
-        }
-
         if (empty($clientId)) return null;
 
         return [
@@ -117,11 +84,20 @@ class OAuthManager
     }
 
     /**
-     * Check if a provider has OAuth support (built-in or configured).
+     * Check if a provider supports browser-based OAuth.
+     * Only ChatGPT/OpenAI does. Claude uses setup-token instead.
      */
     public function hasOAuthSupport(string $provider): bool
     {
-        return isset(self::BUILTIN_CLIENTS[$provider]) || isset(self::$providerEndpoints[$provider]);
+        return isset(self::$providerEndpoints[$provider]);
+    }
+
+    /**
+     * Check if a provider supports setup-token auth (Claude).
+     */
+    public function hasSetupTokenSupport(string $provider): bool
+    {
+        return in_array($provider, ['claude_api', 'claude'], true);
     }
 
     /**
@@ -210,6 +186,25 @@ class OAuthManager
             'refresh_token' => $refreshToken,
             'expires_in' => $expiresIn,
             'auth_method' => 'manual',
+        ]);
+    }
+
+    /**
+     * Store a setup-token from Claude Code CLI.
+     *
+     * Claude doesn't use browser OAuth. Instead:
+     *   1. User runs `claude setup-token` in their terminal
+     *   2. Gets a token string
+     *   3. Pastes it here
+     *
+     * The token is stored the same way as OAuth tokens so providers
+     * can resolve it transparently.
+     */
+    public function storeSetupToken(string $provider, string $token): bool
+    {
+        return $this->storeToken($provider, [
+            'access_token' => $token,
+            'auth_method' => 'setup_token',
         ]);
     }
 

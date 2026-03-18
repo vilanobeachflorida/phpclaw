@@ -184,14 +184,14 @@ class SetupCommand extends BaseCommand
         $providersConfig = $config->load('providers');
 
         $choice = $ui->menu('Choose your LLM provider', [
-            ['label' => 'LM Studio',       'description' => 'Local inference server (recommended)'],
-            ['label' => 'Ollama',           'description' => 'Local model runner'],
-            ['label' => 'OpenAI / ChatGPT', 'description' => 'Sign in with your browser'],
-            ['label' => 'Claude API',       'description' => 'Sign in with your browser'],
-            ['label' => 'Claude Code CLI',  'description' => 'Local Claude Code runtime'],
-            ['label' => 'OpenLLM',          'description' => 'Custom OpenAI-compatible endpoint'],
-            ['label' => 'API key (manual)', 'description' => 'Paste an API key for any provider'],
-            ['label' => 'Skip',             'description' => 'Configure manually later'],
+            ['label' => 'LM Studio',          'description' => 'Local inference server'],
+            ['label' => 'Ollama',              'description' => 'Local model runner'],
+            ['label' => 'ChatGPT OAuth',       'description' => 'Sign in with your OpenAI account'],
+            ['label' => 'Claude OAuth',        'description' => 'Sign in with your Claude subscription'],
+            ['label' => 'Claude API',          'description' => 'Anthropic API key (pay per token)'],
+            ['label' => 'Claude Code CLI',     'description' => 'Local Claude Code runtime'],
+            ['label' => 'OpenLLM',             'description' => 'Custom OpenAI-compatible endpoint'],
+            ['label' => 'Skip',               'description' => 'Configure manually later'],
         ]);
 
         if ($choice === null) return 'back';
@@ -202,10 +202,10 @@ class SetupCommand extends BaseCommand
             case 0: $this->configureLMStudio($ui, $storage, $providersConfig); break;
             case 1: $this->configureOllama($ui, $storage, $providersConfig); break;
             case 2: $this->configureChatGPTOAuth($ui, $storage, $providersConfig); break;
-            case 3: $this->configureClaudeAPIOAuth($ui, $storage, $providersConfig); break;
-            case 4: $this->configureClaudeCode($ui, $storage, $providersConfig); break;
-            case 5: $this->configureOpenLLM($ui, $storage, $providersConfig); break;
-            case 6: $this->configureAPIKey($ui, $storage, $providersConfig); break;
+            case 3: $this->configureClaudeOAuth($ui, $storage, $providersConfig); break;
+            case 4: $this->configureClaudeAPIKey($ui, $storage, $providersConfig); break;
+            case 5: $this->configureClaudeCode($ui, $storage, $providersConfig); break;
+            case 6: $this->configureOpenLLM($ui, $storage, $providersConfig); break;
             case 7:
                 $ui->dim('Skipped. Edit writable/agent/config/providers.json manually.');
                 break;
@@ -407,17 +407,36 @@ class SetupCommand extends BaseCommand
         });
     }
 
+    /**
+     * ChatGPT OAuth — browser sign-in with OpenAI account.
+     *
+     * Requires an OAuth client ID. Checks env var first, then asks.
+     * Opens browser to OpenAI's auth page, catches the redirect.
+     */
     private function configureChatGPTOAuth(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
     {
         $model = 'gpt-4o';
+        $oauth = new OAuthManager($storage);
+
+        // Resolve client ID from env or config
+        $oauthConfig = $oauth->resolveOAuthConfig('chatgpt', $providersConfig['providers']['chatgpt']['oauth'] ?? []);
+
+        // If no client ID available, ask for one
+        if (!$oauthConfig) {
+            $ui->infoBox(
+                'ChatGPT OAuth requires an OAuth Client ID.',
+                'Register an app at: https://platform.openai.com',
+                'Or set PHPCLAW_OPENAI_CLIENT_ID in your environment.'
+            );
+            $clientId = $ui->prompt('OAuth Client ID');
+            if (!$clientId || $clientId === 'back') return;
+            $oauthConfig = ['enabled' => true, 'client_id' => $clientId, 'client_secret' => ''];
+        }
 
         $ui->info('Signing in to OpenAI / ChatGPT...');
         $ui->dim("Default model: {$model}");
 
-        // Enable provider with OAuth using built-in client ID
-        $oauth = new OAuthManager($storage);
-        $oauthConfig = $oauth->resolveOAuthConfig('chatgpt');
-
+        // Enable provider
         $providersConfig['providers']['chatgpt']['enabled'] = true;
         $providersConfig['providers']['chatgpt']['default_model'] = $model;
         $providersConfig['providers']['chatgpt']['oauth'] = $oauthConfig;
@@ -428,78 +447,83 @@ class SetupCommand extends BaseCommand
         $this->runOAuthBrowserFlow($ui, $storage, 'chatgpt', $oauthConfig);
     }
 
-    private function configureClaudeAPIOAuth(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
+    /**
+     * Claude OAuth — setup-token flow.
+     *
+     * Claude doesn't use browser OAuth like ChatGPT.
+     * Instead, you run `claude setup-token` and paste the token.
+     * This uses your Claude Pro/Max subscription.
+     */
+    private function configureClaudeOAuth(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
     {
         $model = 'claude-sonnet-4-20250514';
-
-        $ui->info('Signing in to Claude (Anthropic)...');
-        $ui->dim("Default model: {$model}");
-
-        // Enable provider with OAuth using built-in client ID
         $oauth = new OAuthManager($storage);
-        $oauthConfig = $oauth->resolveOAuthConfig('claude_api');
 
+        $ui->infoBox(
+            'Claude OAuth uses a setup token from Claude Code CLI.',
+            'This uses your Claude Pro or Max subscription.',
+            '',
+            'To get your token, run this in another terminal:',
+            '  claude setup-token',
+        );
+
+        $ui->newLine();
+        $token = $ui->prompt('Paste your setup token', '', true);
+        if (!$token || $token === 'back') return;
+
+        // Store the token
+        $oauth->storeSetupToken('claude_api', $token);
+
+        // Enable provider with OAuth
         $providersConfig['providers']['claude_api']['enabled'] = true;
         $providersConfig['providers']['claude_api']['default_model'] = $model;
-        $providersConfig['providers']['claude_api']['oauth'] = $oauthConfig;
+        $providersConfig['providers']['claude_api']['oauth'] = ['enabled' => true];
         $storage->writeJson('config/providers.json', $providersConfig);
         $this->updateDefaultProvider($storage, 'claude_api', $model);
 
-        // Go straight to browser login
-        $this->runOAuthBrowserFlow($ui, $storage, 'claude_api', $oauthConfig);
+        $ui->newLine();
+        $info = $oauth->getTokenInfo('claude_api');
+        if ($info) {
+            $ui->successBox(
+                'Claude subscription auth configured!',
+                '',
+                'Token: ' . ($info['token_preview'] ?? '****'),
+                "Model: {$model}",
+            );
+        } else {
+            $ui->success('Claude configured with setup token');
+        }
     }
 
     /**
-     * Manual API key entry for any provider (ChatGPT or Claude).
+     * Claude API key — pay-per-token via Anthropic Console.
      */
-    private function configureAPIKey(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
+    private function configureClaudeAPIKey(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
     {
-        $providerChoice = $ui->menu('Which provider?', [
-            ['label' => 'OpenAI / ChatGPT', 'description' => 'Paste an OpenAI API key'],
-            ['label' => 'Claude API',       'description' => 'Paste an Anthropic API key'],
-        ]);
-
-        if ($providerChoice === null) return;
+        $ui->infoBox(
+            'Claude API uses pay-per-token billing.',
+            'Get your API key at: https://console.anthropic.com/settings/keys'
+        );
 
         $ui->newLine();
+        $apiKey = $ui->prompt('Anthropic API key', '', true);
+        if (!$apiKey || $apiKey === 'back') return;
+        $model = $ui->prompt('Default model', 'claude-sonnet-4-20250514');
 
-        if ($providerChoice === 0) {
-            $apiKey = $ui->prompt('OpenAI API key', '', true);
-            if (!$apiKey || $apiKey === 'back') return;
-            $model = $ui->prompt('Default model', 'gpt-4o');
-
-            if (str_starts_with($apiKey, 'sk-')) {
-                $ui->newLine();
-                $ui->warnBox(
-                    'Tip: store API keys in .env, not config files',
-                    'Add to .env: OPENAI_API_KEY=' . substr($apiKey, 0, 10) . '...'
-                );
-            }
-            $providersConfig['providers']['chatgpt']['api_key_env'] = 'OPENAI_API_KEY';
-            $providersConfig['providers']['chatgpt']['enabled'] = true;
-            $providersConfig['providers']['chatgpt']['default_model'] = $model;
-            $storage->writeJson('config/providers.json', $providersConfig);
-            $this->updateDefaultProvider($storage, 'chatgpt', $model);
-            $ui->success('ChatGPT configured with API key');
-        } else {
-            $apiKey = $ui->prompt('Anthropic API key', '', true);
-            if (!$apiKey || $apiKey === 'back') return;
-            $model = $ui->prompt('Default model', 'claude-sonnet-4-20250514');
-
-            if (str_starts_with($apiKey, 'sk-ant-')) {
-                $ui->newLine();
-                $ui->warnBox(
-                    'Tip: store API keys in .env, not config files',
-                    'Add to .env: ANTHROPIC_API_KEY=' . substr($apiKey, 0, 12) . '...'
-                );
-            }
-            $providersConfig['providers']['claude_api']['api_key_env'] = 'ANTHROPIC_API_KEY';
-            $providersConfig['providers']['claude_api']['enabled'] = true;
-            $providersConfig['providers']['claude_api']['default_model'] = $model;
-            $storage->writeJson('config/providers.json', $providersConfig);
-            $this->updateDefaultProvider($storage, 'claude_api', $model);
-            $ui->success('Claude API configured with API key');
+        if (str_starts_with($apiKey, 'sk-ant-')) {
+            $ui->newLine();
+            $ui->warnBox(
+                'Tip: store API keys in .env, not config files',
+                'Add to .env: ANTHROPIC_API_KEY=' . substr($apiKey, 0, 12) . '...'
+            );
         }
+
+        $providersConfig['providers']['claude_api']['api_key_env'] = 'ANTHROPIC_API_KEY';
+        $providersConfig['providers']['claude_api']['enabled'] = true;
+        $providersConfig['providers']['claude_api']['default_model'] = $model;
+        $storage->writeJson('config/providers.json', $providersConfig);
+        $this->updateDefaultProvider($storage, 'claude_api', $model);
+        $ui->success('Claude API configured');
     }
 
     private function configureClaudeCode(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
