@@ -3,15 +3,14 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Storage\ConfigLoader;
 use App\Libraries\Auth\OAuthManager;
-use App\Libraries\Auth\OAuthCallbackServer;
+use App\Libraries\UI\TerminalUI;
 
 /**
  * Manage authentication for providers.
- * Supports OAuth login flows and manual token injection.
+ * Supports OAuth browser login with paste-URL fallback, and manual token injection.
  *
  * Usage:
  *   php spark agent:auth status                  Show auth status for all providers
@@ -27,8 +26,11 @@ class AuthCommand extends BaseCommand
     protected $description = 'Manage provider authentication (OAuth, API keys, tokens)';
     protected $usage = 'agent:auth <action> [provider]';
 
+    private TerminalUI $ui;
+
     public function run(array $params)
     {
+        $this->ui = new TerminalUI();
         $action = $params[0] ?? 'status';
         $provider = $params[1] ?? null;
 
@@ -38,40 +40,42 @@ class AuthCommand extends BaseCommand
                 break;
             case 'login':
                 if (!$provider) {
-                    CLI::error('Usage: php spark agent:auth login <provider>');
-                    CLI::write('Providers with OAuth: chatgpt, claude_api');
+                    $this->ui->error('Usage: php spark agent:auth login <provider>');
+                    $this->ui->dim('Providers with OAuth: chatgpt, claude_api');
                     return;
                 }
                 $this->oauthLogin($provider);
                 break;
             case 'token':
                 if (!$provider) {
-                    CLI::error('Usage: php spark agent:auth token <provider>');
+                    $this->ui->error('Usage: php spark agent:auth token <provider>');
                     return;
                 }
                 $this->manualToken($provider);
                 break;
             case 'refresh':
                 if (!$provider) {
-                    CLI::error('Usage: php spark agent:auth refresh <provider>');
+                    $this->ui->error('Usage: php spark agent:auth refresh <provider>');
                     return;
                 }
                 $this->refreshToken($provider);
                 break;
             case 'revoke':
                 if (!$provider) {
-                    CLI::error('Usage: php spark agent:auth revoke <provider>');
+                    $this->ui->error('Usage: php spark agent:auth revoke <provider>');
                     return;
                 }
                 $this->revokeToken($provider);
                 break;
             default:
-                CLI::write('Usage:', 'yellow');
-                CLI::write('  agent:auth status              Show auth status');
-                CLI::write('  agent:auth login <provider>    OAuth login flow');
-                CLI::write('  agent:auth token <provider>    Paste a token manually');
-                CLI::write('  agent:auth refresh <provider>  Force token refresh');
-                CLI::write('  agent:auth revoke <provider>   Remove stored token');
+                $this->ui->header('Authentication');
+                $this->ui->slashHelp([
+                    'status'              => 'Show auth status for all providers',
+                    'login <provider>'    => 'Start OAuth browser login flow',
+                    'token <provider>'    => 'Paste a token manually',
+                    'refresh <provider>'  => 'Force token refresh',
+                    'revoke <provider>'   => 'Remove stored token',
+                ]);
         }
     }
 
@@ -81,57 +85,59 @@ class AuthCommand extends BaseCommand
         $config = new ConfigLoader($storage);
         $oauth = new OAuthManager($storage);
 
-        CLI::write('=== Authentication Status ===', 'green');
-        CLI::newLine();
+        $this->ui->header('Authentication Status');
 
         $providersConfig = $config->get('providers', 'providers', []);
+        $rows = [];
 
         foreach ($providersConfig as $name => $cfg) {
             if (!($cfg['enabled'] ?? false)) continue;
 
-            CLI::write("  {$name}:", 'cyan');
-
-            // Check API key
+            // API key status
             $apiKeyEnv = $cfg['api_key_env'] ?? '';
-            $hasApiKey = false;
-            if (!empty($cfg['api_key'])) {
-                $hasApiKey = true;
-            } elseif ($apiKeyEnv && getenv($apiKeyEnv)) {
-                $hasApiKey = true;
-            }
+            $hasApiKey = !empty($cfg['api_key']) || ($apiKeyEnv && getenv($apiKeyEnv));
+            $apiKeyStatus = $hasApiKey
+                ? $this->ui->style('configured', 'bright_green')
+                : $this->ui->style('not set', 'gray');
 
-            if ($hasApiKey) {
-                CLI::write("    API Key: configured ({$apiKeyEnv})", 'green');
-            } else {
-                CLI::write("    API Key: not set" . ($apiKeyEnv ? " ({$apiKeyEnv})" : ''), 'light_gray');
-            }
-
-            // Check OAuth
+            // OAuth status
             $oauthEnabled = !empty($cfg['oauth']['enabled']);
+            $oauthStatus = '';
             if ($oauthEnabled) {
                 $tokenInfo = $oauth->getTokenInfo($name);
                 if ($tokenInfo) {
-                    $status = $tokenInfo['expired'] ? 'expired' : 'valid';
-                    $color = $tokenInfo['expired'] ? 'red' : 'green';
-                    CLI::write("    OAuth: {$status} ({$tokenInfo['auth_method']}) {$tokenInfo['token_preview']}", $color);
-                    if ($tokenInfo['expires_at']) {
-                        CLI::write("    Expires: {$tokenInfo['expires_at']}", 'light_gray');
+                    if ($tokenInfo['expired']) {
+                        $oauthStatus = $this->ui->style('expired', 'bright_red');
+                    } else {
+                        $oauthStatus = $this->ui->style('valid', 'bright_green')
+                            . $this->ui->style(" {$tokenInfo['token_preview']}", 'gray');
                     }
-                    CLI::write("    Refresh token: " . ($tokenInfo['has_refresh_token'] ? 'yes' : 'no'), 'light_gray');
                 } else {
-                    CLI::write("    OAuth: enabled but no token stored", 'yellow');
-                    CLI::write("    Run: php spark agent:auth login {$name}", 'yellow');
+                    $oauthStatus = $this->ui->style('no token', 'bright_yellow');
                 }
             } else {
-                // Check if OAuth could be supported
                 $type = $cfg['type'] ?? $name;
                 if (in_array($type, ['chatgpt', 'claude_api'])) {
-                    CLI::write("    OAuth: available (not enabled)", 'light_gray');
+                    $oauthStatus = $this->ui->style('available', 'gray');
+                } else {
+                    $oauthStatus = $this->ui->style('n/a', 'gray');
                 }
             }
 
-            CLI::newLine();
+            $rows[] = [
+                $this->ui->style($name, 'bright_cyan'),
+                $apiKeyStatus,
+                $oauthStatus,
+            ];
         }
+
+        $this->ui->newLine();
+        if (!empty($rows)) {
+            $this->ui->table(['Provider', 'API Key', 'OAuth'], $rows, 'blue');
+        } else {
+            $this->ui->dim('No providers enabled. Run: php spark agent:setup');
+        }
+        $this->ui->newLine();
     }
 
     private function oauthLogin(string $provider): void
@@ -144,105 +150,100 @@ class AuthCommand extends BaseCommand
         $providerConfig = $providersConfig[$provider] ?? null;
 
         if (!$providerConfig) {
-            CLI::error("Provider not found: {$provider}");
-            CLI::write('Available providers: ' . implode(', ', array_keys($providersConfig)));
+            $this->ui->error("Provider not found: {$provider}");
+            $this->ui->dim('Available: ' . implode(', ', array_keys($providersConfig)));
             return;
         }
 
         $oauthConfig = $providerConfig['oauth'] ?? [];
         if (empty($oauthConfig['client_id'])) {
-            CLI::error("OAuth not configured for {$provider}.");
-            CLI::newLine();
-            CLI::write('To enable OAuth, add to writable/agent/config/providers.json:', 'yellow');
-            CLI::write("  \"{$provider}\": {");
-            CLI::write('    "oauth": {');
-            CLI::write('      "enabled": true,');
-            CLI::write('      "client_id": "your-client-id",');
-            CLI::write('      "client_secret": "your-client-secret"');
-            CLI::write('    }');
-            CLI::write('  }');
-            CLI::newLine();
+            $this->ui->error("OAuth not configured for {$provider}.");
+            $this->ui->newLine();
+            $this->ui->infoBox(
+                "To enable OAuth, add to providers.json:",
+                "  \"{$provider}\": { \"oauth\": {",
+                "    \"enabled\": true,",
+                "    \"client_id\": \"your-client-id\"",
+                "  }}",
+            );
 
-            // Offer manual token entry as alternative
-            $manual = CLI::prompt('Would you like to paste a token manually instead?', ['y', 'n']);
-            if ($manual === 'y') {
+            $this->ui->newLine();
+            if ($this->ui->confirm('Paste a token manually instead?', false)) {
                 $this->manualToken($provider);
             }
             return;
         }
 
-        CLI::write("Starting OAuth login for {$provider}...", 'yellow');
-        CLI::newLine();
-
         // Choose flow
-        CLI::write('  1) Browser login (Authorization Code + PKCE) - recommended');
-        CLI::write('  2) Paste token manually');
-        $choice = CLI::prompt('  Select method', '1');
+        $choice = $this->ui->menu("Login to {$provider}", [
+            ['label' => 'Browser login',  'description' => 'Authorization Code + PKCE (recommended)'],
+            ['label' => 'Paste token',    'description' => 'Enter an access token manually'],
+        ]);
 
-        if ($choice === '2') {
+        if ($choice === null) return;
+
+        if ($choice === 1) {
             $this->manualToken($provider);
             return;
         }
 
-        // Authorization Code with PKCE flow
-        $pkce = $oauth->generatePKCE();
-        $state = bin2hex(random_bytes(16));
-        $callbackServer = new OAuthCallbackServer(8484);
-        $redirectUri = $callbackServer->getRedirectUri();
+        // Run browser flow using the shared browserLogin method
+        $this->ui->newLine();
+        $this->ui->divider('Browser Login', 'bright_cyan');
+        $this->ui->newLine();
 
-        $authUrl = $oauth->buildAuthUrl($provider, $oauthConfig, $pkce, $redirectUri, $state);
+        $result = $oauth->browserLogin($provider, $oauthConfig, [
+            'showUrl' => function (string $authUrl) {
+                $this->ui->info('Open this URL in your browser to authorize:');
+                $this->ui->newLine();
+                $this->ui->box([$authUrl], 'bright_cyan');
+                $this->ui->newLine();
+                $this->ui->dim('(Attempting to open your browser automatically...)');
+            },
 
-        CLI::newLine();
-        CLI::write('Open this URL in your browser:', 'green');
-        CLI::newLine();
-        CLI::write("  {$authUrl}", 'cyan');
-        CLI::newLine();
+            'onWaiting' => function () {
+                $this->ui->newLine();
+                $this->ui->inline($this->ui->style('  ◆', 'bright_magenta'));
+                $this->ui->write(' Waiting for authorization...', 'gray');
+                $this->ui->dim('  Complete the login in your browser.');
+                $this->ui->dim('  If nothing happens, you can paste the redirect URL below.');
+                $this->ui->newLine();
+            },
 
-        // Try to open browser automatically
-        $this->openBrowser($authUrl);
+            'promptPaste' => function (): ?string {
+                $this->ui->newLine();
+                $this->ui->warn('Callback server timed out.');
+                $this->ui->newLine();
+                $this->ui->info('After authorizing, copy the URL from your browser\'s address bar.');
+                $this->ui->dim('It looks like: http://localhost:8484/callback?code=abc123&state=xyz...');
+                $this->ui->newLine();
 
-        CLI::write('Waiting for authorization callback on port 8484...', 'yellow');
-        CLI::write('(Press Ctrl+C to cancel)', 'light_gray');
+                $url = $this->ui->prompt('Paste redirect URL (or Enter to cancel)');
+                if (!$url) return null;
+                return $url;
+            },
 
-        $callback = $callbackServer->waitForCallback();
+            'onExchanging' => function () {
+                $this->ui->inline($this->ui->style('  ◆', 'bright_magenta'));
+                $this->ui->write(' Exchanging code for token...', 'gray');
+            },
+        ]);
 
-        if (!$callback) {
-            CLI::error('Timed out waiting for callback.');
-            return;
-        }
+        $this->ui->newLine();
 
-        if (isset($callback['error'])) {
-            CLI::error('Authorization failed: ' . ($callback['error_description'] ?? $callback['error']));
-            return;
-        }
-
-        if (empty($callback['code'])) {
-            CLI::error('No authorization code received.');
-            return;
-        }
-
-        // Verify state
-        if (($callback['state'] ?? '') !== $state) {
-            CLI::error('State mismatch - possible CSRF attack. Aborting.');
-            return;
-        }
-
-        CLI::write('Authorization code received. Exchanging for token...', 'yellow');
-
-        $token = $oauth->exchangeCode($provider, $oauthConfig, $callback['code'], $pkce['code_verifier'], $redirectUri);
-
-        if ($token) {
-            CLI::write("OAuth login successful for {$provider}!", 'green');
-            $info = $oauth->getTokenInfo($provider);
-            if ($info) {
-                CLI::write("  Token: {$info['token_preview']}", 'light_gray');
-                CLI::write("  Refresh token: " . ($info['has_refresh_token'] ? 'yes' : 'no'), 'light_gray');
-                if ($info['expires_at']) {
-                    CLI::write("  Expires: {$info['expires_at']}", 'light_gray');
-                }
-            }
+        if ($result['success'] ?? false) {
+            $info = $result['token_info'] ?? [];
+            $this->ui->successBox(
+                "Logged in to {$provider}!",
+                '',
+                'Token: ' . ($info['token_preview'] ?? '****'),
+                'Refresh token: ' . (($info['has_refresh_token'] ?? false) ? 'yes' : 'no'),
+                ($info['expires_at'] ?? null) ? ('Expires: ' . $info['expires_at']) : 'No expiration',
+            );
         } else {
-            CLI::error('Failed to exchange authorization code for token.');
+            $this->ui->errorBox(
+                'Login failed: ' . ($result['error'] ?? 'Unknown error'),
+            );
         }
     }
 
@@ -251,18 +252,19 @@ class AuthCommand extends BaseCommand
         $storage = new FileStorage();
         $oauth = new OAuthManager($storage);
 
-        CLI::write("Paste token for {$provider}:", 'yellow');
-        CLI::write('(The token will be stored in writable/agent/config/oauth/)', 'light_gray');
-        CLI::newLine();
+        $this->ui->newLine();
+        $this->ui->divider("Manual Token for {$provider}", 'bright_cyan');
+        $this->ui->dim('Token will be stored in writable/agent/config/oauth/');
+        $this->ui->newLine();
 
-        $accessToken = CLI::prompt('  Access token');
+        $accessToken = $this->ui->prompt('Access token', '', true);
         if (empty($accessToken)) {
-            CLI::error('No token provided.');
+            $this->ui->warn('No token provided');
             return;
         }
 
-        $refreshToken = CLI::prompt('  Refresh token (optional, press Enter to skip)');
-        $expiresIn = CLI::prompt('  Expires in seconds (optional, press Enter for no expiry)');
+        $refreshToken = $this->ui->prompt('Refresh token (optional)', '');
+        $expiresIn = $this->ui->prompt('Expires in seconds (optional)', '');
 
         $oauth->storeManualToken(
             $provider,
@@ -271,20 +273,18 @@ class AuthCommand extends BaseCommand
             $expiresIn ? (int)$expiresIn : null
         );
 
-        CLI::write("Token stored for {$provider}.", 'green');
+        $this->ui->newLine();
+        $this->ui->success("Token stored for {$provider}");
 
-        // If this provider isn't enabled with OAuth yet, offer to enable it
+        // Enable OAuth if not already
         $config = new ConfigLoader($storage);
         $providersConfig = $config->get('providers', 'providers', []);
-        if (isset($providersConfig[$provider])) {
-            if (empty($providersConfig[$provider]['oauth']['enabled'])) {
-                $enable = CLI::prompt("Enable OAuth for {$provider} in config?", ['y', 'n']);
-                if ($enable === 'y') {
-                    $providersConfig[$provider]['oauth'] = $providersConfig[$provider]['oauth'] ?? [];
-                    $providersConfig[$provider]['oauth']['enabled'] = true;
-                    $storage->writeJson('config/providers.json', ['providers' => $providersConfig]);
-                    CLI::write("OAuth enabled for {$provider}.", 'green');
-                }
+        if (isset($providersConfig[$provider]) && empty($providersConfig[$provider]['oauth']['enabled'])) {
+            if ($this->ui->confirm("Enable OAuth for {$provider} in config?", true)) {
+                $providersConfig[$provider]['oauth'] = $providersConfig[$provider]['oauth'] ?? [];
+                $providersConfig[$provider]['oauth']['enabled'] = true;
+                $storage->writeJson('config/providers.json', ['providers' => $providersConfig]);
+                $this->ui->success("OAuth enabled for {$provider}");
             }
         }
     }
@@ -295,22 +295,22 @@ class AuthCommand extends BaseCommand
         $oauth = new OAuthManager($storage);
 
         if (!$oauth->hasToken($provider)) {
-            CLI::error("No token stored for {$provider}.");
+            $this->ui->error("No token stored for {$provider}");
             return;
         }
 
-        CLI::write("Refreshing token for {$provider}...", 'yellow');
+        $token = $this->ui->spinner("Refreshing token for {$provider}", function() use ($oauth, $provider) {
+            return $oauth->getAccessToken($provider);
+        });
 
-        // Force refresh by getting the token (OAuthManager handles refresh internally)
-        $token = $oauth->getAccessToken($provider);
         if ($token) {
-            CLI::write("Token refreshed successfully.", 'green');
             $info = $oauth->getTokenInfo($provider);
+            $this->ui->success('Token refreshed');
             if ($info && $info['expires_at']) {
-                CLI::write("  New expiry: {$info['expires_at']}", 'light_gray');
+                $this->ui->dim("New expiry: {$info['expires_at']}");
             }
         } else {
-            CLI::error("Token refresh failed. Try logging in again: php spark agent:auth login {$provider}");
+            $this->ui->error("Refresh failed. Try: php spark agent:auth login {$provider}");
         }
     }
 
@@ -319,32 +319,13 @@ class AuthCommand extends BaseCommand
         $oauth = new OAuthManager(new FileStorage());
 
         if (!$oauth->hasToken($provider)) {
-            CLI::write("No token stored for {$provider}.", 'light_gray');
+            $this->ui->dim("No token stored for {$provider}");
             return;
         }
 
-        $confirm = CLI::prompt("Remove stored token for {$provider}?", ['y', 'n']);
-        if ($confirm === 'y') {
+        if ($this->ui->confirm("Remove stored token for {$provider}?", false)) {
             $oauth->revokeToken($provider);
-            CLI::write("Token removed for {$provider}.", 'green');
-        }
-    }
-
-    /**
-     * Try to open URL in default browser.
-     */
-    private function openBrowser(string $url): void
-    {
-        $os = PHP_OS_FAMILY;
-        $cmd = match ($os) {
-            'Darwin' => "open " . escapeshellarg($url),
-            'Linux' => "xdg-open " . escapeshellarg($url),
-            'Windows' => "start " . escapeshellarg($url),
-            default => null,
-        };
-
-        if ($cmd) {
-            @exec($cmd . ' > /dev/null 2>&1 &');
+            $this->ui->success("Token removed for {$provider}");
         }
     }
 }

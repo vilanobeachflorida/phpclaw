@@ -5,6 +5,7 @@ namespace App\Commands\Agent;
 use CodeIgniter\CLI\BaseCommand;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Storage\ConfigLoader;
+use App\Libraries\Auth\OAuthManager;
 use App\Libraries\UI\TerminalUI;
 
 /**
@@ -445,16 +446,21 @@ class SetupCommand extends BaseCommand
         $clientSecret = $ui->prompt('OAuth Client Secret (optional)', '');
         $model = $ui->prompt('Default model', 'gpt-4');
 
+        // Save config first
+        $oauthConfig = ['enabled' => true, 'client_id' => $clientId, 'client_secret' => $clientSecret];
         $providersConfig['providers']['chatgpt']['enabled'] = true;
         $providersConfig['providers']['chatgpt']['default_model'] = $model;
-        $providersConfig['providers']['chatgpt']['oauth'] = [
-            'enabled' => true, 'client_id' => $clientId, 'client_secret' => $clientSecret,
-        ];
+        $providersConfig['providers']['chatgpt']['oauth'] = $oauthConfig;
         $storage->writeJson('config/providers.json', $providersConfig);
         $this->updateDefaultProvider($storage, 'chatgpt', $model);
 
-        $ui->success('ChatGPT OAuth configured');
-        $ui->info('Run: php spark agent:auth login chatgpt');
+        // Offer to log in now
+        $ui->newLine();
+        if ($ui->confirm('Log in with OpenAI now?', true)) {
+            $this->runOAuthBrowserFlow($ui, $storage, 'chatgpt', $oauthConfig);
+        } else {
+            $ui->dim('You can log in later: php spark agent:auth login chatgpt');
+        }
     }
 
     private function configureClaudeAPI(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
@@ -494,16 +500,21 @@ class SetupCommand extends BaseCommand
         $clientSecret = $ui->prompt('OAuth Client Secret (optional)', '');
         $model = $ui->prompt('Default model', 'claude-sonnet-4-20250514');
 
+        // Save config first
+        $oauthConfig = ['enabled' => true, 'client_id' => $clientId, 'client_secret' => $clientSecret];
         $providersConfig['providers']['claude_api']['enabled'] = true;
         $providersConfig['providers']['claude_api']['default_model'] = $model;
-        $providersConfig['providers']['claude_api']['oauth'] = [
-            'enabled' => true, 'client_id' => $clientId, 'client_secret' => $clientSecret,
-        ];
+        $providersConfig['providers']['claude_api']['oauth'] = $oauthConfig;
         $storage->writeJson('config/providers.json', $providersConfig);
         $this->updateDefaultProvider($storage, 'claude_api', $model);
 
-        $ui->success('Claude API OAuth configured');
-        $ui->info('Run: php spark agent:auth login claude_api');
+        // Offer to log in now
+        $ui->newLine();
+        if ($ui->confirm('Log in with Anthropic now?', true)) {
+            $this->runOAuthBrowserFlow($ui, $storage, 'claude_api', $oauthConfig);
+        } else {
+            $ui->dim('You can log in later: php spark agent:auth login claude_api');
+        }
     }
 
     private function configureClaudeCode(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
@@ -543,6 +554,82 @@ class SetupCommand extends BaseCommand
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Run a full OAuth browser login flow inline in the setup wizard.
+     *
+     * Shows the auth URL, tries the callback server, and falls back to
+     * letting the user paste the redirect URL if the server times out.
+     */
+    private function runOAuthBrowserFlow(TerminalUI $ui, FileStorage $storage, string $provider, array $oauthConfig): void
+    {
+        $oauth = new OAuthManager($storage);
+
+        $ui->newLine();
+        $ui->divider('Browser Login', 'bright_cyan');
+        $ui->newLine();
+
+        $result = $oauth->browserLogin($provider, $oauthConfig, [
+            'showUrl' => function (string $authUrl) use ($ui) {
+                $ui->info('Open this URL in your browser to authorize:');
+                $ui->newLine();
+
+                // Show URL in a box so it's easy to copy
+                $ui->box([$authUrl], 'bright_cyan');
+
+                $ui->newLine();
+                $ui->dim('(Attempting to open your browser automatically...)');
+            },
+
+            'onWaiting' => function () use ($ui) {
+                $ui->newLine();
+                $ui->inline($ui->style('  ◆', 'bright_magenta'));
+                $ui->write(' Waiting for authorization... (complete login in your browser)', 'gray');
+                $ui->dim('  The wizard will continue automatically when you authorize.');
+                $ui->dim('  If nothing happens, you can paste the redirect URL below.');
+                $ui->newLine();
+            },
+
+            'promptPaste' => function () use ($ui): ?string {
+                $ui->newLine();
+                $ui->warn('Callback server timed out or could not receive the redirect.');
+                $ui->newLine();
+                $ui->info('After authorizing in your browser, copy the URL from your');
+                $ui->info('browser\'s address bar and paste it here.');
+                $ui->dim('It looks like: http://localhost:8484/callback?code=abc123&state=xyz...');
+                $ui->newLine();
+
+                $url = $ui->prompt('Paste redirect URL (or press Enter to skip)');
+                if (!$url || $url === 'back') return null;
+                return $url;
+            },
+
+            'onExchanging' => function () use ($ui) {
+                $ui->inline($ui->style('  ◆', 'bright_magenta'));
+                $ui->write(' Exchanging authorization code for token...', 'gray');
+            },
+        ]);
+
+        $ui->newLine();
+
+        if ($result['success'] ?? false) {
+            $info = $result['token_info'] ?? [];
+            $ui->successBox(
+                "Logged in to {$provider} successfully!",
+                '',
+                'Token: ' . ($info['token_preview'] ?? '****'),
+                'Refresh token: ' . ($info['has_refresh_token'] ? 'yes' : 'no'),
+                $info['expires_at'] ? ('Expires: ' . $info['expires_at']) : 'No expiration',
+            );
+        } else {
+            $error = $result['error'] ?? 'Unknown error';
+            $ui->errorBox(
+                "OAuth login failed: {$error}",
+                '',
+                "You can try again later: php spark agent:auth login {$provider}",
+            );
+        }
+    }
 
     private function testConnection(TerminalUI $ui, string $url, string $name, callable $onSuccess): void
     {

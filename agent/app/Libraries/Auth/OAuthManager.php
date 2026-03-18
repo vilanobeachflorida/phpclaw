@@ -20,10 +20,18 @@ class OAuthManager
         'chatgpt' => [
             'authorize_url' => 'https://auth.openai.com/authorize',
             'token_url' => 'https://auth.openai.com/oauth/token',
-            'device_url' => null, // OpenAI doesn't support device flow yet
+            'device_url' => null,
             'scopes' => 'openid profile email',
             'audience' => 'https://api.openai.com/v1',
         ],
+        'claude_api' => [
+            'authorize_url' => 'https://console.anthropic.com/oauth/authorize',
+            'token_url' => 'https://console.anthropic.com/oauth/token',
+            'device_url' => null,
+            'scopes' => '',
+            'audience' => '',
+        ],
+        // Legacy alias
         'claude' => [
             'authorize_url' => 'https://console.anthropic.com/oauth/authorize',
             'token_url' => 'https://console.anthropic.com/oauth/token',
@@ -249,6 +257,144 @@ class OAuthManager
         }
 
         return null;
+    }
+
+    /**
+     * Extract authorization code and state from a pasted redirect URL.
+     *
+     * Users paste the full URL from their browser's address bar after authorization:
+     *   http://localhost:8484/callback?code=abc123&state=xyz789
+     *
+     * Returns ['code' => '...', 'state' => '...'] or null on failure.
+     */
+    public function extractCodeFromUrl(string $url): ?array
+    {
+        $parsed = parse_url(trim($url));
+        if (!$parsed || empty($parsed['query'])) {
+            return null;
+        }
+
+        parse_str($parsed['query'], $params);
+
+        if (!empty($params['error'])) {
+            return ['error' => $params['error'], 'error_description' => $params['error_description'] ?? null];
+        }
+
+        if (empty($params['code'])) {
+            return null;
+        }
+
+        return [
+            'code' => $params['code'],
+            'state' => $params['state'] ?? null,
+        ];
+    }
+
+    /**
+     * Run a complete browser-based OAuth login flow.
+     *
+     * This is the all-in-one method used by the setup wizard and auth command.
+     * It handles:
+     *   1. PKCE generation
+     *   2. Auth URL construction
+     *   3. Callback server OR manual URL paste
+     *   4. Code exchange
+     *
+     * Returns a result array:
+     *   ['success' => true, 'token_info' => [...]]
+     *   ['success' => false, 'error' => '...']
+     *
+     * The $callbacks array controls UI interaction:
+     *   'showUrl'      => fn(string $authUrl)           — display the URL to the user
+     *   'onWaiting'    => fn()                           — show "waiting for callback"
+     *   'promptPaste'  => fn(): ?string                  — ask user to paste redirect URL (fallback)
+     *   'onExchanging' => fn()                           — show "exchanging code"
+     */
+    public function browserLogin(string $provider, array $oauthConfig, array $callbacks = []): array
+    {
+        $pkce = $this->generatePKCE();
+        $state = bin2hex(random_bytes(16));
+
+        // Determine redirect URI and whether we'll use callback server
+        $callbackPort = 8484;
+        $redirectUri = "http://localhost:{$callbackPort}/callback";
+
+        $authUrl = $this->buildAuthUrl($provider, $oauthConfig, $pkce, $redirectUri, $state);
+
+        // Show URL to user
+        if (isset($callbacks['showUrl'])) {
+            ($callbacks['showUrl'])($authUrl);
+        }
+
+        // Try to open browser
+        $this->tryOpenBrowser($authUrl);
+
+        // Try callback server first
+        $callback = null;
+        $callbackServer = new OAuthCallbackServer($callbackPort, 120);
+
+        if (isset($callbacks['onWaiting'])) {
+            ($callbacks['onWaiting'])();
+        }
+
+        $callback = $callbackServer->waitForCallback();
+
+        // If callback server failed/timed out, offer paste fallback
+        if (!$callback && isset($callbacks['promptPaste'])) {
+            $pastedUrl = ($callbacks['promptPaste'])();
+            if ($pastedUrl) {
+                $callback = $this->extractCodeFromUrl($pastedUrl);
+            }
+        }
+
+        if (!$callback) {
+            return ['success' => false, 'error' => 'No authorization response received'];
+        }
+
+        if (isset($callback['error'])) {
+            return ['success' => false, 'error' => $callback['error_description'] ?? $callback['error']];
+        }
+
+        if (empty($callback['code'])) {
+            return ['success' => false, 'error' => 'No authorization code received'];
+        }
+
+        // Verify state
+        if (($callback['state'] ?? '') !== $state) {
+            return ['success' => false, 'error' => 'State mismatch — possible CSRF attack'];
+        }
+
+        // Exchange code for tokens
+        if (isset($callbacks['onExchanging'])) {
+            ($callbacks['onExchanging'])();
+        }
+
+        $token = $this->exchangeCode($provider, $oauthConfig, $callback['code'], $pkce['code_verifier'], $redirectUri);
+
+        if (!$token) {
+            return ['success' => false, 'error' => 'Failed to exchange authorization code for token'];
+        }
+
+        return [
+            'success' => true,
+            'token_info' => $this->getTokenInfo($provider),
+        ];
+    }
+
+    /**
+     * Try to open a URL in the default browser. Best-effort, no error on failure.
+     */
+    private function tryOpenBrowser(string $url): void
+    {
+        $cmd = match (PHP_OS_FAMILY) {
+            'Darwin'  => "open " . escapeshellarg($url),
+            'Linux'   => "xdg-open " . escapeshellarg($url),
+            'Windows' => "start " . escapeshellarg($url),
+            default   => null,
+        };
+        if ($cmd) {
+            @exec($cmd . ' > /dev/null 2>&1 &');
+        }
     }
 
     // ---- Device Authorization Grant ----
