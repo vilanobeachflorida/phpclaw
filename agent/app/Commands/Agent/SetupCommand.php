@@ -184,14 +184,14 @@ class SetupCommand extends BaseCommand
         $providersConfig = $config->load('providers');
 
         $choice = $ui->menu('Choose your LLM provider', [
-            ['label' => 'LM Studio',          'description' => 'Local inference server'],
-            ['label' => 'Ollama',              'description' => 'Local model runner'],
-            ['label' => 'ChatGPT OAuth',       'description' => 'Sign in with your OpenAI account'],
-            ['label' => 'Claude OAuth',        'description' => 'Sign in with your Claude subscription'],
-            ['label' => 'Claude API',          'description' => 'Anthropic API key (pay per token)'],
-            ['label' => 'Claude Code CLI',     'description' => 'Local Claude Code runtime'],
-            ['label' => 'OpenLLM',             'description' => 'Custom OpenAI-compatible endpoint'],
-            ['label' => 'Skip',               'description' => 'Configure manually later'],
+            ['label' => 'LM Studio',      'description' => 'Local inference server'],
+            ['label' => 'Ollama',          'description' => 'Local model runner'],
+            ['label' => 'OpenAI / ChatGPT','description' => 'API key from platform.openai.com'],
+            ['label' => 'Claude OAuth',    'description' => 'Use your Claude Pro/Max subscription'],
+            ['label' => 'Claude API',      'description' => 'API key from console.anthropic.com'],
+            ['label' => 'Claude Code CLI', 'description' => 'Local Claude Code runtime'],
+            ['label' => 'OpenLLM',         'description' => 'Custom OpenAI-compatible endpoint'],
+            ['label' => 'Skip',            'description' => 'Configure manually later'],
         ]);
 
         if ($choice === null) return 'back';
@@ -201,7 +201,7 @@ class SetupCommand extends BaseCommand
         switch ($choice) {
             case 0: $this->configureLMStudio($ui, $storage, $providersConfig); break;
             case 1: $this->configureOllama($ui, $storage, $providersConfig); break;
-            case 2: $this->configureChatGPTOAuth($ui, $storage, $providersConfig); break;
+            case 2: $this->configureChatGPT($ui, $storage, $providersConfig); break;
             case 3: $this->configureClaudeOAuth($ui, $storage, $providersConfig); break;
             case 4: $this->configureClaudeAPIKey($ui, $storage, $providersConfig); break;
             case 5: $this->configureClaudeCode($ui, $storage, $providersConfig); break;
@@ -408,43 +408,33 @@ class SetupCommand extends BaseCommand
     }
 
     /**
-     * ChatGPT OAuth — browser sign-in with OpenAI account.
-     *
-     * Requires an OAuth client ID. Checks env var first, then asks.
-     * Opens browser to OpenAI's auth page, catches the redirect.
+     * ChatGPT / OpenAI — API key setup.
      */
-    private function configureChatGPTOAuth(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
+    private function configureChatGPT(TerminalUI $ui, FileStorage $storage, array $providersConfig): void
     {
-        $model = 'gpt-4o';
-        $oauth = new OAuthManager($storage);
+        $ui->infoBox(
+            'Get your API key at: https://platform.openai.com/api-keys'
+        );
 
-        // Resolve client ID from env or config
-        $oauthConfig = $oauth->resolveOAuthConfig('chatgpt', $providersConfig['providers']['chatgpt']['oauth'] ?? []);
+        $ui->newLine();
+        $apiKey = $ui->prompt('OpenAI API key', '', true);
+        if (!$apiKey || $apiKey === 'back') return;
+        $model = $ui->prompt('Default model', 'gpt-4o');
 
-        // If no client ID available, ask for one
-        if (!$oauthConfig) {
-            $ui->infoBox(
-                'ChatGPT OAuth requires an OAuth Client ID.',
-                'Register an app at: https://platform.openai.com',
-                'Or set PHPCLAW_OPENAI_CLIENT_ID in your environment.'
-            );
-            $clientId = $ui->prompt('OAuth Client ID');
-            if (!$clientId || $clientId === 'back') return;
-            $oauthConfig = ['enabled' => true, 'client_id' => $clientId, 'client_secret' => ''];
-        }
-
-        $ui->info('Signing in to OpenAI / ChatGPT...');
-        $ui->dim("Default model: {$model}");
-
-        // Enable provider
+        $providersConfig['providers']['chatgpt']['api_key_env'] = 'OPENAI_API_KEY';
         $providersConfig['providers']['chatgpt']['enabled'] = true;
         $providersConfig['providers']['chatgpt']['default_model'] = $model;
-        $providersConfig['providers']['chatgpt']['oauth'] = $oauthConfig;
         $storage->writeJson('config/providers.json', $providersConfig);
         $this->updateDefaultProvider($storage, 'chatgpt', $model);
 
-        // Go straight to browser login
-        $this->runOAuthBrowserFlow($ui, $storage, 'chatgpt', $oauthConfig);
+        // Store the actual key in .env hint
+        if (str_starts_with($apiKey, 'sk-')) {
+            $ui->newLine();
+            $ui->dim("Add to your .env file:  OPENAI_API_KEY={$apiKey}");
+        }
+
+        $ui->newLine();
+        $ui->success('OpenAI / ChatGPT configured');
     }
 
     /**
@@ -563,82 +553,6 @@ class SetupCommand extends BaseCommand
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
-
-    /**
-     * Run a full OAuth browser login flow inline in the setup wizard.
-     *
-     * Shows the auth URL, tries the callback server, and falls back to
-     * letting the user paste the redirect URL if the server times out.
-     */
-    private function runOAuthBrowserFlow(TerminalUI $ui, FileStorage $storage, string $provider, array $oauthConfig): void
-    {
-        $oauth = new OAuthManager($storage);
-
-        $ui->newLine();
-        $ui->divider('Browser Login', 'bright_cyan');
-        $ui->newLine();
-
-        $result = $oauth->browserLogin($provider, $oauthConfig, [
-            'showUrl' => function (string $authUrl) use ($ui) {
-                $ui->info('Open this URL in your browser to authorize:');
-                $ui->newLine();
-
-                // Show URL in a box so it's easy to copy
-                $ui->box([$authUrl], 'bright_cyan');
-
-                $ui->newLine();
-                $ui->dim('(Attempting to open your browser automatically...)');
-            },
-
-            'onWaiting' => function () use ($ui) {
-                $ui->newLine();
-                $ui->inline($ui->style('  ◆', 'bright_magenta'));
-                $ui->write(' Waiting for authorization... (complete login in your browser)', 'gray');
-                $ui->dim('  The wizard will continue automatically when you authorize.');
-                $ui->dim('  If nothing happens, you can paste the redirect URL below.');
-                $ui->newLine();
-            },
-
-            'promptPaste' => function () use ($ui): ?string {
-                $ui->newLine();
-                $ui->warn('Callback server timed out or could not receive the redirect.');
-                $ui->newLine();
-                $ui->info('After authorizing in your browser, copy the URL from your');
-                $ui->info('browser\'s address bar and paste it here.');
-                $ui->dim('It looks like: http://localhost:8484/callback?code=abc123&state=xyz...');
-                $ui->newLine();
-
-                $url = $ui->prompt('Paste redirect URL (or press Enter to skip)');
-                if (!$url || $url === 'back') return null;
-                return $url;
-            },
-
-            'onExchanging' => function () use ($ui) {
-                $ui->inline($ui->style('  ◆', 'bright_magenta'));
-                $ui->write(' Exchanging authorization code for token...', 'gray');
-            },
-        ]);
-
-        $ui->newLine();
-
-        if ($result['success'] ?? false) {
-            $info = $result['token_info'] ?? [];
-            $ui->successBox(
-                "Logged in to {$provider} successfully!",
-                '',
-                'Token: ' . ($info['token_preview'] ?? '****'),
-                'Refresh token: ' . ($info['has_refresh_token'] ? 'yes' : 'no'),
-                $info['expires_at'] ? ('Expires: ' . $info['expires_at']) : 'No expiration',
-            );
-        } else {
-            $error = $result['error'] ?? 'Unknown error';
-            $ui->errorBox(
-                "OAuth login failed: {$error}",
-                '',
-                "You can try again later: php spark agent:auth login {$provider}",
-            );
-        }
-    }
 
     private function testConnection(TerminalUI $ui, string $url, string $name, callable $onSuccess): void
     {
