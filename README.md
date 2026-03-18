@@ -1,284 +1,329 @@
-# PHPClaw - Terminal-First Multi-Model AI Agent Shell
+# PHPClaw
 
-PHPClaw is a compact, open-source, terminal-first, multi-model AI agent shell built in PHP with CodeIgniter 4. It provides a self-hosted CLI-native runtime for interacting with multiple AI model providers, managing long-lived sessions, executing background tasks, and maintaining persistent memory -- all from the terminal.
+Terminal-first, multi-model AI agent shell built in PHP. Run it on your machine, connect any LLM provider, and work from your terminal.
 
-## Goals
+```
+  ╔══════════════════════════════════════════════╗
+  ║           PHPClaw Agent Shell                ║
+  ║                 v0.1.0                       ║
+  ╚══════════════════════════════════════════════╝
 
-- **Self-hosted CLI-native agent runtime** -- runs on your machine, no cloud dependency required.
-- **Long-lived service** -- operates as a persistent background service with a heartbeat loop.
-- **Interactive terminal** -- full REPL-style chat interface with slash commands.
-- **Multiple model providers** -- route requests to Ollama, OpenLLM, ChatGPT, Claude Code, or custom providers.
-- **Background tasks** -- queue, monitor, and manage asynchronous task execution.
-- **Modular tools** -- extensible tool system with scaffolding support.
-- **File-based storage** -- no database required; everything is stored in structured files.
-- **Memory with compaction** -- layered memory system with automatic summarization and compaction.
-- **Open-source extensibility** -- scaffold new tools, providers, and modules with built-in commands.
+  reasoning:ollama ❯ fetch the top 5 hacker news stories and summarize them
+  ◆ Working...
+    ✓ browser_fetch
+    ✓ browser_fetch
+    ✓ browser_fetch
 
-## Non-Goals
+  Here are today's top Hacker News stories...
 
-- Not a web SaaS platform.
-- Not an enterprise orchestration framework.
-- Not a distributed microservices architecture.
-- Not a web dashboard or GUI application.
-- Not a multi-tenant system.
+  ─ 4.2k in · 890 out · 3 tools · 5.1s ─
+```
 
-## Architecture Overview
-
-PHPClaw is organized into several core layers:
-
-- **Providers** -- adapters for AI model backends (Ollama, OpenLLM, ChatGPT, Claude Code).
-- **Tools** -- callable actions the agent can invoke (file operations, shell, web fetch, etc.).
-- **Modules** -- role-based configurations that combine a prompt, tools, and model routing.
-- **Sessions** -- persistent conversation state with transcript logging.
-- **Tasks** -- background job queue with step tracking and progress reporting.
-- **Memory** -- layered note extraction, compaction, and summary generation.
-- **Cache** -- response and artifact caching with TTL and pruning.
-- **Service Loop** -- long-running process that handles tasks, maintenance, and health checks.
-
-## Requirements
-
-- PHP 8.2 or later
-- CodeIgniter 4
-- Linux CLI environment
-- PHP `curl` extension enabled
+PHPClaw is like Claude Code, but open-source, self-hosted, and works with any LLM. Connect Ollama, LM Studio, OpenAI, Claude, or any OpenAI-compatible endpoint. It has tools for file operations, shell commands, web browsing, and more. The agent loops autonomously -- calling tools, reading results, and continuing until the task is done.
 
 ## Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourorg/phpclaw.git
+git clone https://github.com/sergiozlobin/phpclaw.git
 cd phpclaw/agent
 
-# Copy environment config
-cp .env.example .env
+# Install dependencies
+composer install
 
-# Configure your providers
-# Edit writable/agent/config/providers.json
+# Run the setup wizard
+php spark agent:setup
 
-# Start an interactive chat session
+# Start chatting
 php spark agent:chat
 ```
 
+The setup wizard walks you through everything: environment check, directory setup, provider configuration (with interactive menus), and validation.
+
+## Requirements
+
+- PHP 8.2+
+- `curl`, `json`, `mbstring` extensions
+- Composer
+- At least one LLM provider (see below)
+
+Optional but recommended:
+- `readline` extension (better chat input with history)
+- `pcntl` extension (graceful shutdown / signal handling)
+
+## Supported Providers
+
+| Provider | Type | Auth |
+|----------|------|------|
+| **Ollama** | Local | None (runs on your machine) |
+| **LM Studio** | Local | None |
+| **OpenAI / ChatGPT** | Cloud | API key |
+| **Claude API** | Cloud | API key (pay per token) |
+| **Claude OAuth** | Cloud | Setup token (uses your subscription) |
+| **Claude Code CLI** | Local | Claude Code must be installed |
+| **OpenLLM** | Any | API key (OpenAI-compatible endpoint) |
+
+### Setting Up a Provider
+
+The setup wizard handles this interactively:
+
+```bash
+php spark agent:setup
+```
+
+Or configure manually in `writable/agent/config/providers.json`.
+
+**Ollama (easiest for local)**
+```bash
+# Install Ollama: https://ollama.ai
+ollama pull llama3
+# PHPClaw connects to http://localhost:11434 by default
+```
+
+**OpenAI / ChatGPT**
+```bash
+# Get API key from https://platform.openai.com/api-keys
+# Set in .env:
+OPENAI_API_KEY=sk-...
+```
+
+**Claude API**
+```bash
+# Get API key from https://console.anthropic.com/settings/keys
+# Set in .env:
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Claude OAuth (use your subscription)**
+```bash
+# Generates a setup token from your Claude Pro/Max subscription:
+claude setup-token
+# Paste the token during setup wizard
+```
+
+## How It Works
+
+PHPClaw runs an agent loop:
+
+1. You type a message
+2. The agent sends it to your LLM with a system prompt describing available tools
+3. The LLM responds with text and/or tool calls
+4. PHPClaw executes the tools (read files, fetch URLs, run commands, etc.)
+5. Results are fed back to the LLM
+6. The loop continues until the LLM responds with no tool calls (task complete)
+
+There's no iteration limit. The agent runs until it's done. If it gets stuck (same calls repeated, or all tools failing), it asks you what to do: continue, stop, or give new instructions.
+
+## Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `file_read` | Read file contents |
+| `file_write` | Write content to a file |
+| `file_append` | Append to a file |
+| `dir_list` | List directory contents |
+| `mkdir` | Create directories |
+| `move_file` | Move or rename files |
+| `delete_file` | Delete files |
+| `grep_search` | Search file contents with patterns |
+| `shell_exec` | Execute shell commands |
+| `http_get` | Make HTTP GET requests |
+| `browser_fetch` | Fetch and parse web pages |
+| `browser_text` | Extract text from web pages |
+| `system_info` | Get system information |
+
+## Chat Commands
+
+While in `agent:chat`, use slash commands:
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/exit` | Exit chat |
+| `/usage` | Token usage and cost breakdown |
+| `/provider` | Show active providers |
+| `/model` | Show current model routing |
+| `/role [name]` | Show or set current role |
+| `/module [name]` | Show or set current module |
+| `/tools` | List available tools |
+| `/tasks` | Show active tasks |
+| `/memory` | Show memory stats |
+| `/status` | Show system status |
+| `/debug` | Toggle debug mode (shows per-request tokens) |
+
+## Token Usage Tracking
+
+PHPClaw tracks token usage and estimates costs, similar to Claude Code:
+
+```
+─ 847 in · 234 out · $0.004 · 2 tools · 1.2s ─
+```
+
+Use `/usage` for a full session breakdown with per-model costs. Local providers (Ollama, LM Studio) show $0.00.
+
 ## CLI Commands
 
-### Core
+```bash
+# Core
+php spark agent:chat              # Interactive chat (main interface)
+php spark agent:setup             # Setup wizard
+php spark agent:serve             # Start background service
+php spark agent:status            # System status
 
-| Command | Description |
-|---|---|
-| `agent:chat` | Start an interactive chat session (REPL) |
-| `agent:config` | Display or validate current configuration |
-| `agent:serve` | Start the long-running service loop |
-| `agent:status` | Show service status and health information |
+# Providers & Models
+php spark agent:providers         # List providers and health
+php spark agent:models            # List available models
+php spark agent:roles             # List model roles
+php spark agent:modules           # List modules
 
-### Providers and Models
+# Authentication
+php spark agent:auth status       # Show auth status
+php spark agent:auth login <p>    # OAuth/setup-token login
+php spark agent:auth token <p>    # Paste token manually
+php spark agent:auth refresh <p>  # Force token refresh
+php spark agent:auth revoke <p>   # Remove stored token
 
-| Command | Description |
-|---|---|
-| `agent:providers` | List configured providers and their status |
-| `agent:models` | List available models across all providers |
-| `agent:roles` | List defined roles and their model assignments |
-| `agent:modules` | List available modules and their configuration |
+# Sessions
+php spark agent:sessions          # List sessions
+php spark agent:session:show <id> # Show session transcript
 
-### Sessions
+# Tasks
+php spark agent:tasks             # List tasks
+php spark agent:task:show <id>    # Show task details
+php spark agent:task:tail <id>    # Follow task progress
+php spark agent:task:cancel <id>  # Cancel a task
 
-| Command | Description |
-|---|---|
-| `agent:sessions` | List all stored sessions |
-| `agent:session:show` | Display details and transcript of a specific session |
+# Memory & Cache
+php spark agent:memory:show       # Memory stats and notes
+php spark agent:memory:compact    # Run memory compaction
+php spark agent:cache:status      # Cache statistics
+php spark agent:cache:clear       # Clear all cache
+php spark agent:cache:prune       # Prune expired entries
+php spark agent:maintain          # Run all maintenance
 
-### Tasks
+# Scaffolding
+php spark agent:tools             # List tools
+php spark agent:tool:scaffold     # Generate new tool from template
+php spark agent:provider:scaffold # Generate new provider from template
 
-| Command | Description |
-|---|---|
-| `agent:tasks` | List all tasks and their current status |
-| `agent:task:show` | Display details of a specific task |
-| `agent:task:tail` | Follow live output of a running task |
-| `agent:task:cancel` | Cancel a queued or running task |
+# Configuration
+php spark agent:config            # List config files
+php spark agent:config <name>     # Show config with syntax highlighting
+```
 
-### Memory
+## Architecture
 
-| Command | Description |
-|---|---|
-| `agent:memory:show` | Display memory contents for a scope |
-| `agent:memory:compact` | Run compaction on memory notes |
-| `agent:maintain` | Run all maintenance routines (memory, cache, logs) |
+```
+┌─────────────────────────────────────────────────┐
+│                   User Input                     │
+│              (Terminal / CLI REPL)                │
+└──────────────────────┬──────────────────────────┘
+                       │
+              ┌────────▼────────┐
+              │  Agent Executor  │ ← loops until done
+              │   (core loop)   │
+              └──┬──────────┬───┘
+                 │          │
+        ┌────────▼──┐  ┌───▼────────┐
+        │  Model     │  │   Tool     │
+        │  Router    │  │  Registry  │
+        └────┬───────┘  └───┬────────┘
+             │              │
+     ┌───────▼───────┐  ┌──▼──────────────┐
+     │  Providers     │  │  Tools           │
+     │  ┌──────────┐  │  │  file_read       │
+     │  │ Ollama   │  │  │  file_write      │
+     │  │ LMStudio │  │  │  shell_exec      │
+     │  │ ChatGPT  │  │  │  browser_fetch   │
+     │  │ Claude   │  │  │  grep_search     │
+     │  │ OpenLLM  │  │  │  ...13 total     │
+     │  └──────────┘  │  └─────────────────┘
+     └────────────────┘
+```
 
-### Cache
+**Providers** are LLM backends. Each has an adapter that normalizes the API.
 
-| Command | Description |
-|---|---|
-| `agent:cache:status` | Show cache usage statistics |
-| `agent:cache:clear` | Clear all cached data |
-| `agent:cache:prune` | Remove expired cache entries |
+**Roles** map tasks to providers. "reasoning" might go to Ollama, "coding" to Claude.
 
-### Scaffolding
+**Modules** combine a role + prompt + tool set. The "coding" module enables file/shell tools and uses a code-focused prompt.
 
-| Command | Description |
-|---|---|
-| `agent:tools` | List all registered tools |
-| `agent:tool:scaffold` | Generate a new tool from template |
-| `agent:provider:scaffold` | Generate a new provider from template |
+**Sessions** persist conversation history, transcripts, and tool events.
 
-## Interactive Chat Slash Commands
-
-While in an `agent:chat` session, the following slash commands are available:
-
-| Command | Description |
-|---|---|
-| `/help` | Show available slash commands |
-| `/provider` | Switch or display the active provider |
-| `/model` | Switch or display the active model |
-| `/role` | Switch or display the active role |
-| `/module` | Switch or display the active module |
-| `/tools` | List available tools |
-| `/tasks` | List background tasks |
-| `/memory` | Show memory for current session |
-| `/status` | Display session and service status |
-| `/debug` | Toggle debug output |
-| `/save` | Save current session transcript |
-| `/exit` | End the chat session |
+**Memory** extracts key information across sessions with automatic compaction.
 
 ## Storage Layout
 
-All runtime data lives under `writable/agent/`:
+All runtime data is in `writable/agent/`:
 
 ```
 writable/agent/
-├── config/
-│   ├── providers.json
-│   ├── roles.json
-│   ├── modules.json
-│   └── service.json
-├── sessions/
-│   ├── index.json
-│   └── <session-id>/
-│       ├── session.json
-│       ├── transcript.ndjson
-│       └── memory/
-├── tasks/
-│   ├── index.json
-│   └── <task-id>/
-│       ├── task.json
-│       ├── steps.ndjson
-│       ├── progress.ndjson
-│       ├── messages.ndjson
-│       ├── output.md
-│       ├── artifacts/
-│       └── checkpoints/
-├── memory/
-│   ├── global/
-│   │   ├── notes.ndjson
-│   │   ├── summary.md
-│   │   └── compacted/
-│   ├── sessions/
-│   ├── modules/
-│   └── tasks/
-├── cache/
-│   ├── index.json
-│   └── entries/
-├── logs/
-│   ├── service.log
-│   └── errors.log
-├── prompts/
-│   ├── system/
-│   └── modules/
-└── templates/
-    ├── tool.php.tpl
-    └── provider.php.tpl
+├── config/          # providers.json, roles.json, modules.json, tools.json
+├── sessions/        # Conversation history and transcripts
+├── tasks/           # Background task queue and progress
+├── memory/          # Global notes, summaries, compacted knowledge
+├── cache/           # LLM response and tool caches
+├── logs/            # Service and error logs
+├── prompts/         # System and module prompt templates
+├── state/           # Service state, heartbeat, health
+├── queues/          # Task queues
+└── locks/           # File locks
 ```
 
-## Provider Setup
+No database required. Everything is JSON files and NDJSON logs.
 
-### Ollama (Local)
+## Running as a Service
 
-Install Ollama and pull a model:
+PHPClaw can run as a background service with a heartbeat loop:
 
 ```bash
-ollama pull llama3
+# Start the service
+php spark agent:serve
+
+# Or use systemd (Linux)
+sudo cp phpclaw.service /etc/systemd/system/
+sudo systemctl enable phpclaw
+sudo systemctl start phpclaw
 ```
 
-Configure in `writable/agent/config/providers.json`:
+The service handles health checks, task execution, memory compaction, and cache pruning on configurable intervals.
 
-```json
-{
-  "ollama": {
-    "type": "ollama",
-    "base_url": "http://localhost:11434",
-    "enabled": true
-  }
-}
-```
+## Extending PHPClaw
 
-### OpenLLM
-
-Configure with your OpenLLM-compatible endpoint:
-
-```json
-{
-  "openllm": {
-    "type": "openllm",
-    "base_url": "http://localhost:3000",
-    "api_key": "your-key",
-    "enabled": true
-  }
-}
-```
-
-### ChatGPT
-
-Requires an OpenAI API key:
-
-```json
-{
-  "chatgpt": {
-    "type": "chatgpt",
-    "api_key": "sk-...",
-    "enabled": true
-  }
-}
-```
-
-Note: ChatGPT uses externally supplied OAuth credentials. PHPClaw does not manage OpenAI account creation or billing.
-
-### Claude Code
-
-Uses the Claude Code CLI for integration:
-
-```json
-{
-  "claude": {
-    "type": "claude_code",
-    "enabled": true
-  }
-}
-```
-
-Ensure the `claude` CLI is installed and authenticated.
-
-## Adding Custom Tools and Providers
-
-Use the built-in scaffold commands to generate new tools and providers from templates:
+### Add a Custom Tool
 
 ```bash
-# Scaffold a new tool
-php spark agent:tool:scaffold MyCustomTool
-
-# Scaffold a new provider
-php spark agent:provider:scaffold MyCustomProvider
+php spark agent:tool:scaffold MyTool
 ```
 
-Edit the generated files to implement your logic, then register them in the appropriate config.
+This generates a tool class from the template. Implement the `execute()` method and register it in `writable/agent/config/tools.json`.
 
-## Development Workflow
+### Add a Custom Provider
 
-1. Clone the repository and install dependencies.
-2. Copy `.env.example` to `.env` and configure.
-3. Set up at least one provider (Ollama is easiest for local development).
-4. Run `php spark agent:chat` to test interactively.
-5. Use scaffold commands to add tools or providers.
-6. Run `php spark agent:serve` to test the service loop.
+```bash
+php spark agent:provider:scaffold MyProvider
+```
 
-See `docs/development.md` for detailed development guidance.
+Implement the `chat()` and `healthCheck()` methods. Register in `writable/agent/config/providers.json`.
+
+### Custom Prompts
+
+Edit prompt templates in `writable/agent/prompts/`:
+- `system/default.md` — base system prompt
+- `modules/*.md` — per-module prompts (coding, reasoning, browser, etc.)
+
+## Documentation
+
+See the `docs/` directory for detailed documentation:
+
+- [Architecture](docs/architecture.md) — system design and component overview
+- [Providers](docs/providers.md) — provider configuration and custom adapters
+- [Tools](docs/tools.md) — tool system and custom tool development
+- [Modules](docs/modules.md) — role-based module configuration
+- [Routing](docs/routing.md) — model routing and fallback chains
+- [Memory](docs/memory.md) — memory system, compaction, and summaries
+- [Tasks](docs/tasks.md) — background task queue
+- [Storage](docs/storage.md) — file storage layout and formats
+- [Service](docs/service.md) — background service configuration
+- [Development](docs/development.md) — development workflow and guidelines
 
 ## License
 
