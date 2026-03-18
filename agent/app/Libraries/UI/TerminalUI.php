@@ -478,6 +478,70 @@ class TerminalUI
         }
     }
 
+    // ── Usage / Token Display ───────────────────────────────────────
+
+    /**
+     * Display a turn usage summary line (shown after each agent response).
+     * Compact single-line format like Claude Code:
+     *   ─ 847 in · 234 out · $0.004 · 2 tools · 1.2s ─
+     */
+    public function turnUsage(string $summary): void
+    {
+        if (empty($summary)) return;
+        $line = $this->style("  ─ {$summary} ─", 'gray');
+        echo "{$line}\n";
+    }
+
+    /**
+     * Display a full session usage panel (for /usage command).
+     */
+    public function usagePanel(array $session, array $perModel = []): void
+    {
+        $this->header('Session Usage');
+        $this->newLine();
+
+        $this->keyValue([
+            'Input tokens'  => $this->style((string)($session['input_tokens'] ?? 0), 'bright_cyan'),
+            'Output tokens' => $this->style((string)($session['output_tokens'] ?? 0), 'bright_green'),
+            'Total tokens'  => $this->style((string)($session['total_tokens'] ?? 0), 'bright_white', 'bold'),
+            'Est. cost'     => $this->style($session['cost_formatted'] ?? '$0.00', 'bright_yellow'),
+            'API requests'  => (string)($session['requests'] ?? 0),
+            'Tool calls'    => (string)($session['tool_calls'] ?? 0),
+            'Turns'         => (string)($session['turns'] ?? 0),
+            'Duration'      => $session['elapsed_formatted'] ?? '0s',
+        ]);
+
+        if (!empty($perModel)) {
+            $this->newLine();
+            $this->divider('Per Model', 'bright_cyan');
+            $this->newLine();
+
+            $rows = [];
+            foreach ($perModel as $model => $data) {
+                $rows[] = [
+                    $this->style($model, 'bright_cyan'),
+                    (string)($data['input'] ?? 0),
+                    (string)($data['output'] ?? 0),
+                    $data['cost_formatted'] ?? '$0.00',
+                    (string)($data['requests'] ?? 0),
+                ];
+            }
+            $this->table(['Model', 'Input', 'Output', 'Cost', 'Requests'], $rows, 'blue');
+        }
+        $this->newLine();
+    }
+
+    /**
+     * Display a compact session cost in the banner area.
+     * Example:  Session cost: $0.04 (12.4k tokens)
+     */
+    public function sessionCostLine(string $cost, string $tokens): void
+    {
+        $this->inline("  Session: ");
+        $this->inline($this->style($cost, 'bright_yellow'));
+        $this->write($this->style(" ({$tokens} tokens)", 'gray'));
+    }
+
     // ── Interactive Input ───────────────────────────────────────────
 
     /**

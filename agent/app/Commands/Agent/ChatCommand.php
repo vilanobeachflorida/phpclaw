@@ -12,13 +12,15 @@ use App\Libraries\Router\ModelRouter;
 use App\Libraries\Memory\MemoryManager;
 use App\Libraries\Agent\AgentExecutor;
 use App\Libraries\Agent\PromptBuilder;
+use App\Libraries\Agent\UsageTracker;
 use App\Libraries\UI\TerminalUI;
 
 /**
  * Interactive chat REPL - the primary user interface for PHPClaw.
  *
  * Uses TerminalUI for proper readline input (no backspace issues),
- * styled output, and a clean visual design.
+ * styled output, and a clean visual design. Tracks and displays
+ * token usage and cost estimates after each turn, like Claude Code.
  */
 class ChatCommand extends BaseCommand
 {
@@ -37,6 +39,7 @@ class ChatCommand extends BaseCommand
     private MemoryManager $memory;
     private AgentExecutor $agent;
     private PromptBuilder $promptBuilder;
+    private UsageTracker $usageTracker;
     private string $currentRole = 'reasoning';
     private string $currentModule = 'reasoning';
     private bool $debugMode = false;
@@ -51,6 +54,7 @@ class ChatCommand extends BaseCommand
         $this->tools = new ToolRegistry($this->config);
         $this->router = new ModelRouter($this->config);
         $this->memory = new MemoryManager($this->storage);
+        $this->usageTracker = new UsageTracker();
 
         // Load providers and tools
         $this->providers->loadAll();
@@ -70,13 +74,14 @@ class ChatCommand extends BaseCommand
         $this->currentRole = $this->config->get('app', 'default_role', 'reasoning');
         $this->currentModule = $this->config->get('app', 'default_module', 'reasoning');
 
-        // Create agent executor
+        // Create agent executor with usage tracking
         $this->agent = new AgentExecutor(
             $this->router,
             $this->tools,
             $this->debugMode,
             $this->sessions,
-            $sessionId
+            $sessionId,
+            $this->usageTracker
         );
 
         $this->printBanner();
@@ -117,23 +122,39 @@ class ChatCommand extends BaseCommand
             $this->ui->newLine();
             $this->ui->thinking();
 
-            // Execute agent loop
-            $response = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
+            // Execute agent loop — returns {text, usage}
+            $result = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
+            $responseText = $result['text'] ?? '';
+            $turnUsage = $result['usage'] ?? null;
 
-            // Clear thinking indicator and show response
+            // Clear thinking indicator
             $this->ui->thinkingDone();
 
-            if ($response) {
-                $this->ui->agentResponse($response);
+            // Show response
+            if ($responseText) {
+                $this->ui->agentResponse($responseText);
+            }
+
+            // Show turn usage line
+            if ($turnUsage) {
+                $summary = $this->usageTracker->formatTurnSummary($turnUsage);
+                $this->ui->turnUsage($summary);
             }
 
             if ($this->debugMode) {
                 $this->ui->dim("[Debug] Role: {$this->currentRole} | Provider: {$route['provider']} | Model: {$route['model']}");
                 $this->ui->dim("[Debug] History: " . count($conversationHistory) . " messages");
+                $this->ui->dim("[Debug] Session: " . $this->usageTracker->formatSessionSummary());
             }
         }
 
+        // Show final session summary on exit
         $this->ui->newLine();
+        $this->ui->hr('bright_blue');
+        $sessionSummary = $this->usageTracker->formatSessionSummary();
+        if ($sessionSummary) {
+            $this->ui->dim("Session: {$sessionSummary}");
+        }
         $this->ui->success('Session saved. Goodbye!');
         $this->ui->newLine();
     }
@@ -171,6 +192,11 @@ class ChatCommand extends BaseCommand
             case '/exit':
             case '/quit':
                 return 'exit';
+            case '/usage':
+            case '/tokens':
+            case '/cost':
+                $this->showUsage();
+                break;
             case '/provider':
                 $this->showProviders();
                 break;
@@ -239,7 +265,7 @@ class ChatCommand extends BaseCommand
         ], 'bright_cyan');
 
         $this->ui->newLine();
-        $this->ui->dim('Type /help for commands, /exit to quit');
+        $this->ui->dim('Type /help for commands, /usage for token stats, /exit to quit');
         $this->ui->hr();
     }
 
@@ -248,6 +274,7 @@ class ChatCommand extends BaseCommand
         $this->ui->slashHelp([
             '/help'       => 'Show this help',
             '/exit'       => 'Exit chat',
+            '/usage'      => 'Show token usage and cost breakdown',
             '/provider'   => 'Show active providers',
             '/model'      => 'Show current model routing',
             '/role [r]'   => 'Show or set current role',
@@ -256,9 +283,34 @@ class ChatCommand extends BaseCommand
             '/tasks'      => 'Show active tasks',
             '/memory'     => 'Show memory stats',
             '/status'     => 'Show system status',
-            '/debug'      => 'Toggle debug mode',
+            '/debug'      => 'Toggle debug mode (shows tokens per request)',
             '/save'       => 'Confirm session save',
         ]);
+    }
+
+    private function showUsage(): void
+    {
+        $summary = $this->usageTracker->getSessionSummary();
+
+        // Format costs for display
+        $summary['cost_formatted'] = $this->usageTracker->formatCost($summary['cost']);
+        $summary['elapsed_formatted'] = $this->usageTracker->formatDuration((int)($summary['elapsed_s'] * 1000));
+
+        // Format per-model costs
+        $perModel = $summary['per_model'] ?? [];
+        foreach ($perModel as $model => &$data) {
+            $data['cost_formatted'] = $this->usageTracker->formatCost($data['cost']);
+        }
+
+        $this->ui->usagePanel($summary, $perModel);
+
+        // Show last turn details
+        $lastTurn = $this->usageTracker->getLastTurn();
+        if ($lastTurn) {
+            $this->ui->divider('Last Turn', 'gray');
+            $this->ui->dim($this->usageTracker->formatTurnSummary($lastTurn));
+            $this->ui->newLine();
+        }
     }
 
     private function showProviders(): void
@@ -333,9 +385,13 @@ class ChatCommand extends BaseCommand
             default   => 'gray',
         };
 
+        // Show system status + current session usage inline
+        $sessionSummary = $this->usageTracker->formatSessionSummary();
+
         $this->ui->keyValue([
             'Service'        => $this->ui->style($serviceStatus, $statusColor),
             'Last heartbeat' => $heartbeat['last_check'] ?? 'never',
+            'Session usage'  => $sessionSummary ?: 'none yet',
         ]);
     }
 }

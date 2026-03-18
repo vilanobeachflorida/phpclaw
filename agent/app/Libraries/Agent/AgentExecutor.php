@@ -26,6 +26,7 @@ class AgentExecutor
     private ToolRegistry $tools;
     private ResponseParser $parser;
     private TerminalUI $ui;
+    private ?UsageTracker $usage;
     private ?SessionManager $sessions;
     private ?string $sessionId;
     private bool $debug;
@@ -41,7 +42,8 @@ class AgentExecutor
         ToolRegistry $tools,
         bool $debug = false,
         ?SessionManager $sessions = null,
-        ?string $sessionId = null
+        ?string $sessionId = null,
+        ?UsageTracker $usage = null
     ) {
         $this->router = $router;
         $this->tools = $tools;
@@ -50,6 +52,7 @@ class AgentExecutor
         $this->debug = $debug;
         $this->sessions = $sessions;
         $this->sessionId = $sessionId;
+        $this->usage = $usage;
     }
 
     public function setDebug(bool $debug): void
@@ -63,12 +66,22 @@ class AgentExecutor
         $this->sessionId = $sessionId;
     }
 
+    public function setUsageTracker(?UsageTracker $usage): void
+    {
+        $this->usage = $usage;
+    }
+
     /**
      * Execute an agent turn: send to LLM, run tools, loop until done.
-     * Returns the final display text for the user.
+     *
+     * Returns an array with:
+     *   'text'  => final display text
+     *   'usage' => turn usage metrics (or null if no tracker)
      */
-    public function execute(string $role, array &$conversationHistory, string $systemPrompt): string
+    public function execute(string $role, array &$conversationHistory, string $systemPrompt): array
     {
+        $this->usage?->startTurn();
+
         $iteration = 0;
         $totalToolCalls = 0;
         $allDisplayText = [];
@@ -86,21 +99,31 @@ class AgentExecutor
             );
 
             if ($this->debug) {
-                $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} total tool calls, " . count($messages) . " messages");
+                $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} tool calls, " . count($messages) . " messages");
             }
 
             $response = $this->router->chat($role, $messages);
 
+            // Track usage from this LLM call
+            $this->usage?->recordLLMCall($response);
+
             if (!($response['success'] ?? false)) {
                 $error = $response['error'] ?? 'Unknown error';
                 $this->ui->error("Provider error: {$error}");
-                return "Error: {$error}";
+                return $this->buildResult("Error: {$error}");
             }
 
             $rawContent = $response['content'] ?? '';
 
             if ($this->debug) {
-                $this->ui->dim("[Agent] Raw response length: " . strlen($rawContent));
+                $usage = $response['usage'] ?? $response['metadata']['usage'] ?? null;
+                $tokenInfo = '';
+                if ($usage) {
+                    $in = $usage['input_tokens'] ?? $usage['prompt_tokens'] ?? '?';
+                    $out = $usage['output_tokens'] ?? $usage['completion_tokens'] ?? '?';
+                    $tokenInfo = " | Tokens: {$in} in, {$out} out";
+                }
+                $this->ui->dim("[Agent] Response: " . strlen($rawContent) . " chars{$tokenInfo}");
             }
 
             // Parse the response
@@ -123,19 +146,18 @@ class AgentExecutor
                 if ($this->debug) {
                     $this->ui->dim("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls");
                 }
-                return $finalText;
+                return $this->buildResult($finalText);
             }
 
             // --- Stuck detection ---
 
-            // Check for repeated identical tool calls
             $callSig = $this->buildCallSignature($parsed['tool_calls']);
             if (!empty($previousCallSignatures) && end($previousCallSignatures) === $callSig) {
                 $repeatCount++;
                 if ($repeatCount >= $this->maxRepeats) {
                     $stuckResult = $this->handleStuck('repeating the same tool calls', $allDisplayText, $conversationHistory);
                     if ($stuckResult !== null) {
-                        return $stuckResult;
+                        return $this->buildResult($stuckResult);
                     }
                     $repeatCount = 0;
                     $previousCallSignatures = [];
@@ -149,6 +171,7 @@ class AgentExecutor
             // Execute tool calls
             $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
             $totalToolCalls += count($toolResults);
+            $this->usage?->recordToolCalls(count($toolResults));
 
             // Check for consecutive all-failed iterations
             $allFailed = true;
@@ -164,7 +187,7 @@ class AgentExecutor
                 if ($consecutiveFailures >= $this->maxConsecutiveFailures) {
                     $stuckResult = $this->handleStuck('tools are failing repeatedly', $allDisplayText, $conversationHistory);
                     if ($stuckResult !== null) {
-                        return $stuckResult;
+                        return $this->buildResult($stuckResult);
                     }
                     $consecutiveFailures = 0;
                     continue;
@@ -178,6 +201,18 @@ class AgentExecutor
             $resultMessage = $this->formatToolResults($toolResults);
             $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
         }
+    }
+
+    /**
+     * Build the return value, ending the current turn in the usage tracker.
+     */
+    private function buildResult(string $text): array
+    {
+        $turnUsage = $this->usage?->endTurn();
+        return [
+            'text'  => $text,
+            'usage' => $turnUsage,
+        ];
     }
 
     /**
@@ -305,6 +340,7 @@ class AgentExecutor
             'content' => $content,
             'provider' => $response['provider'] ?? null,
             'model' => $response['model'] ?? null,
+            'usage' => $response['usage'] ?? $response['metadata']['usage'] ?? null,
         ]);
     }
 
