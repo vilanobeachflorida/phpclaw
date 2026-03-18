@@ -118,17 +118,12 @@ class ChatCommand extends BaseCommand
             // Build system prompt
             $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule);
 
-            // Show thinking indicator
-            $this->ui->newLine();
-            $this->ui->thinking();
-
             // Execute agent loop — returns {text, usage}
+            // The executor shows its own thinking/working indicators
+            $this->ui->newLine();
             $result = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
             $responseText = $result['text'] ?? '';
             $turnUsage = $result['usage'] ?? null;
-
-            // Clear thinking indicator
-            $this->ui->thinkingDone();
 
             // Show response
             if ($responseText) {

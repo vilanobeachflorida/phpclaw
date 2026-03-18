@@ -92,6 +92,13 @@ class AgentExecutor
         while (true) {
             $iteration++;
 
+            // Show thinking indicator while waiting for LLM
+            if ($iteration > 1) {
+                // Clear previous thinking line and show fresh one
+                $this->ui->thinkingDone();
+            }
+            $this->ui->thinking($iteration === 1 ? 'Thinking' : 'Working');
+
             // Build messages with system prompt
             $messages = array_merge(
                 [['role' => 'system', 'content' => $systemPrompt]],
@@ -99,10 +106,14 @@ class AgentExecutor
             );
 
             if ($this->debug) {
+                $this->ui->thinkingDone();
                 $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} tool calls, " . count($messages) . " messages");
             }
 
             $response = $this->router->chat($role, $messages);
+
+            // Clear thinking indicator
+            $this->ui->thinkingDone();
 
             // Track usage from this LLM call
             $this->usage?->recordLLMCall($response);
@@ -129,12 +140,11 @@ class AgentExecutor
             // Parse the response
             $parsed = $this->parser->parse($rawContent);
 
-            // Show any display text before tool calls
-            if ($parsed['display']) {
+            // Only show display text if it's a final response (no tool calls)
+            // When there ARE tool calls, the display text is usually internal
+            // reasoning that shouldn't be shown — the tool results matter.
+            if ($parsed['display'] && !$parsed['has_tool_calls']) {
                 $allDisplayText[] = $parsed['display'];
-                if ($parsed['has_tool_calls']) {
-                    $this->ui->write("  {$parsed['display']}", 'white');
-                }
             }
 
             // If no tool calls, the model is done
