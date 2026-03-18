@@ -3,26 +3,32 @@
 namespace App\Libraries\Agent;
 
 use App\Libraries\Service\ToolRegistry;
+use App\Libraries\Memory\MemoryManager;
 use App\Libraries\Storage\FileStorage;
 
 /**
- * Builds system prompts that describe available tools to the LLM.
- * This is what makes the model tool-aware - it instructs the model on
- * what tools exist, how to invoke them, and the expected format.
+ * Builds system prompts with tool descriptions, memory context,
+ * and environment info. This is what makes the model aware of
+ * its tools and what it knows from previous interactions.
  */
 class PromptBuilder
 {
     private ToolRegistry $tools;
+    private MemoryManager $memory;
     private FileStorage $storage;
 
-    public function __construct(ToolRegistry $tools, ?FileStorage $storage = null)
+    public function __construct(ToolRegistry $tools, ?FileStorage $storage = null, ?MemoryManager $memory = null)
     {
         $this->tools = $tools;
         $this->storage = $storage ?? new FileStorage();
+        $this->memory = $memory ?? new MemoryManager($this->storage);
     }
 
     /**
      * Build the full system prompt for the agent.
+     *
+     * @param string $module   Current module (reasoning, coding, etc)
+     * @param array  $context  Additional context: session_id, etc.
      */
     public function buildSystemPrompt(string $module = 'reasoning', array $context = []): string
     {
@@ -35,6 +41,13 @@ class PromptBuilder
         $modulePrompt = $this->getModulePrompt($module);
         if ($modulePrompt) {
             $parts[] = $modulePrompt;
+        }
+
+        // Memory context — permanent notes, session context, global summary
+        $sessionId = $context['session_id'] ?? null;
+        $memoryContext = $this->memory->buildPromptContext($sessionId);
+        if ($memoryContext) {
+            $parts[] = $memoryContext;
         }
 
         // Tool descriptions
@@ -82,6 +95,10 @@ PROMPT;
         $lines[] = '<tool_call>{"name": "tool_name", "args": {"arg1": "value1"}}</tool_call>';
         $lines[] = "```\n";
         $lines[] = "You can make multiple tool calls in a single response. After each tool call, you will receive the result and can continue.\n";
+
+        // Memory instructions
+        $lines[] = "**Important: Use memory_write to save anything you might need to remember later** — user preferences, project details, important facts, corrections, etc. Use memory_read to recall saved information.\n";
+
         $lines[] = "### Tools:\n";
 
         foreach ($toolList as $tool) {
@@ -106,23 +123,17 @@ PROMPT;
 
         // Tool usage examples
         $lines[] = "### Examples:\n";
-        $lines[] = 'Create a file:';
-        $lines[] = '<tool_call>{"name": "file_write", "args": {"path": "/home/user/hello.txt", "content": "Hello World!"}}</tool_call>';
-        $lines[] = '';
         $lines[] = 'Read a file:';
         $lines[] = '<tool_call>{"name": "file_read", "args": {"path": "/etc/hostname"}}</tool_call>';
         $lines[] = '';
         $lines[] = 'Run a command:';
         $lines[] = '<tool_call>{"name": "shell_exec", "args": {"command": "date"}}</tool_call>';
         $lines[] = '';
-        $lines[] = 'Search files:';
-        $lines[] = '<tool_call>{"name": "grep_search", "args": {"pattern": "TODO", "path": "/home/user/project"}}</tool_call>';
+        $lines[] = 'Save to memory:';
+        $lines[] = '<tool_call>{"name": "memory_write", "args": {"content": "User prefers Python for scripting", "type": "permanent", "tags": "preference"}}</tool_call>';
         $lines[] = '';
-        $lines[] = 'List directory:';
-        $lines[] = '<tool_call>{"name": "dir_list", "args": {"path": "/home/user"}}</tool_call>';
-        $lines[] = '';
-        $lines[] = 'Fetch a URL:';
-        $lines[] = '<tool_call>{"name": "http_get", "args": {"url": "https://api.example.com/data"}}</tool_call>';
+        $lines[] = 'Recall memory:';
+        $lines[] = '<tool_call>{"name": "memory_read", "args": {"type": "search", "query": "preference"}}</tool_call>';
 
         return implode("\n", $lines);
     }
@@ -154,6 +165,7 @@ PROMPT;
 - Do NOT wrap your thinking in <think> tags or output internal reasoning. Just respond directly.
 - Keep responses concise. Lead with actions, follow with brief explanations only if needed.
 - Do NOT refuse tasks by saying you lack filesystem access - you have tools for that.
+- When you learn something important about the user or their project, use memory_write to save it for future reference.
 PROMPT;
     }
 }

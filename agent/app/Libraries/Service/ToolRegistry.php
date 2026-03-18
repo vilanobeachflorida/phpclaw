@@ -8,7 +8,8 @@ use App\Libraries\Tools\{
     FileReadTool, FileWriteTool, FileAppendTool,
     DirListTool, MkdirTool, MoveFileTool, DeleteFileTool,
     GrepSearchTool, HttpGetTool, BrowserFetchTool, BrowserTextTool,
-    ShellExecTool, SystemInfoTool
+    ShellExecTool, SystemInfoTool,
+    MemoryWriteTool, MemoryReadTool
 };
 
 /**
@@ -33,6 +34,8 @@ class ToolRegistry
         'browser_text' => BrowserTextTool::class,
         'shell_exec' => ShellExecTool::class,
         'system_info' => SystemInfoTool::class,
+        'memory_write' => MemoryWriteTool::class,
+        'memory_read' => MemoryReadTool::class,
     ];
 
     public function __construct(?ConfigLoader $config = null)

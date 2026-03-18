@@ -84,6 +84,7 @@ class AgentExecutor
 
         $iteration = 0;
         $totalToolCalls = 0;
+        $allToolsUsed = [];
         $allDisplayText = [];
         $previousCallSignatures = [];
         $consecutiveFailures = 0;
@@ -121,7 +122,7 @@ class AgentExecutor
             if (!($response['success'] ?? false)) {
                 $error = $response['error'] ?? 'Unknown error';
                 $this->ui->error("Provider error: {$error}");
-                return $this->buildResult("Error: {$error}");
+                return $this->buildResult("Error: {$error}", $allToolsUsed);
             }
 
             $rawContent = $response['content'] ?? '';
@@ -156,7 +157,7 @@ class AgentExecutor
                 if ($this->debug) {
                     $this->ui->dim("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls");
                 }
-                return $this->buildResult($finalText);
+                return $this->buildResult($finalText, $allToolsUsed);
             }
 
             // --- Stuck detection ---
@@ -167,7 +168,7 @@ class AgentExecutor
                 if ($repeatCount >= $this->maxRepeats) {
                     $stuckResult = $this->handleStuck('repeating the same tool calls', $allDisplayText, $conversationHistory);
                     if ($stuckResult !== null) {
-                        return $this->buildResult($stuckResult);
+                        return $this->buildResult($stuckResult, $allToolsUsed);
                     }
                     $repeatCount = 0;
                     $previousCallSignatures = [];
@@ -178,10 +179,13 @@ class AgentExecutor
             }
             $previousCallSignatures[] = $callSig;
 
-            // Execute tool calls
+            // Execute tool calls (inject session_id for memory tools)
             $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
             $totalToolCalls += count($toolResults);
             $this->usage?->recordToolCalls(count($toolResults));
+            foreach ($toolResults as $r) {
+                $allToolsUsed[] = ['tool' => $r['tool']];
+            }
 
             // Check for consecutive all-failed iterations
             $allFailed = true;
@@ -197,7 +201,7 @@ class AgentExecutor
                 if ($consecutiveFailures >= $this->maxConsecutiveFailures) {
                     $stuckResult = $this->handleStuck('tools are failing repeatedly', $allDisplayText, $conversationHistory);
                     if ($stuckResult !== null) {
-                        return $this->buildResult($stuckResult);
+                        return $this->buildResult($stuckResult, $allToolsUsed);
                     }
                     $consecutiveFailures = 0;
                     continue;
@@ -216,12 +220,13 @@ class AgentExecutor
     /**
      * Build the return value, ending the current turn in the usage tracker.
      */
-    private function buildResult(string $text): array
+    private function buildResult(string $text, array $toolsUsed = []): array
     {
         $turnUsage = $this->usage?->endTurn();
         return [
-            'text'  => $text,
-            'usage' => $turnUsage,
+            'text'       => $text,
+            'usage'      => $turnUsage,
+            'tools_used' => $toolsUsed,
         ];
     }
 
@@ -271,6 +276,11 @@ class AgentExecutor
         foreach ($toolCalls as $call) {
             $toolName = $call['name'];
             $toolArgs = $call['args'] ?? [];
+
+            // Inject session context for memory tools
+            if ($this->sessionId && in_array($toolName, ['memory_write', 'memory_read'])) {
+                $toolArgs['_session_id'] = $this->sessionId;
+            }
 
             if ($this->debug) {
                 $this->ui->dim("    Args: " . json_encode($toolArgs, JSON_UNESCAPED_SLASHES));

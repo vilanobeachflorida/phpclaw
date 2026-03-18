@@ -65,8 +65,8 @@ class ChatCommand extends BaseCommand
             $this->router->registerProvider($name, $provider);
         }
 
-        // Build prompt builder
-        $this->promptBuilder = new PromptBuilder($this->tools, $this->storage);
+        // Build prompt builder with memory
+        $this->promptBuilder = new PromptBuilder($this->tools, $this->storage, $this->memory);
 
         // Create or resume session
         $sessionId = $this->initSession($params[0] ?? null);
@@ -115,8 +115,10 @@ class ChatCommand extends BaseCommand
 
             $conversationHistory[] = ['role' => 'user', 'content' => $input];
 
-            // Build system prompt
-            $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule);
+            // Build system prompt with memory context
+            $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule, [
+                'session_id' => $sessionId,
+            ]);
 
             // Execute agent loop — returns {text, usage}
             // The executor shows its own thinking/working indicators
@@ -124,11 +126,15 @@ class ChatCommand extends BaseCommand
             $result = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
             $responseText = $result['text'] ?? '';
             $turnUsage = $result['usage'] ?? null;
+            $toolsUsed = $result['tools_used'] ?? [];
 
             // Show response
             if ($responseText) {
                 $this->ui->agentResponse($responseText);
             }
+
+            // Ingest turn into memory (session + global notes)
+            $this->memory->ingestTurn($sessionId, $input, $responseText, $toolsUsed);
 
             // Show turn usage line
             if ($turnUsage) {
@@ -361,11 +367,24 @@ class ChatCommand extends BaseCommand
     {
         $stats = $this->memory->getStats();
         $this->ui->keyValue([
-            'Global notes' => $stats['global_notes'] ?? 0,
-            'Summaries'    => $stats['total_summaries'] ?? 0,
-            'Compactions'  => $stats['compaction_count'] ?? 0,
-            'Last compact' => $stats['last_compaction'] ?? 'never',
+            'Permanent notes' => $stats['permanent_notes'] ?? 0,
+            'Global notes'    => $stats['global_notes'] ?? 0,
+            'Summaries'       => $stats['total_summaries'] ?? 0,
+            'Compacted'       => $stats['notes_compacted'] ?? 0,
+            'Last compaction' => $stats['last_compaction'] ?? 'never',
         ]);
+
+        // Show permanent notes if any
+        $permanent = $this->memory->getPermanentNotes();
+        if (!empty($permanent)) {
+            $this->ui->newLine();
+            $this->ui->divider('Permanent Memory', 'bright_cyan');
+            foreach (array_slice($permanent, -10) as $note) {
+                $content = $note['content'] ?? '';
+                $tags = !empty($note['tags']) ? $this->ui->style(' [' . implode(', ', $note['tags']) . ']', 'gray') : '';
+                $this->ui->bullet($content . $tags, 'white');
+            }
+        }
     }
 
     private function showStatus(): void
