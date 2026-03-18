@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Session\SessionManager;
+use App\Libraries\UI\TerminalUI;
 
 class SessionShowCommand extends BaseCommand
 {
@@ -16,9 +16,11 @@ class SessionShowCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $id = $params[0] ?? null;
+
         if (!$id) {
-            CLI::error('Usage: php spark agent:session:show <session_id>');
+            $ui->error('Usage: php spark agent:session:show <session_id>');
             return;
         }
 
@@ -26,35 +28,48 @@ class SessionShowCommand extends BaseCommand
         $session = $sessions->get($id);
 
         if (!$session) {
-            CLI::error("Session not found: {$id}");
+            $ui->error("Session not found: {$id}");
             return;
         }
 
-        CLI::write('=== Session: ' . $session['name'] . ' ===', 'green');
-        CLI::write('ID: ' . $session['id']);
-        CLI::write('Status: ' . $session['status']);
-        CLI::write('Created: ' . $session['created_at']);
-        CLI::write('Messages: ' . ($session['message_count'] ?? 0));
-        CLI::newLine();
+        $ui->header('Session: ' . $session['name']);
+        $ui->newLine();
+
+        $statusColor = match($session['status'] ?? '') {
+            'active'   => 'bright_green',
+            'archived' => 'gray',
+            default    => 'white',
+        };
+
+        $ui->keyValue([
+            'ID'       => $session['id'],
+            'Status'   => $ui->style($session['status'] ?? 'unknown', $statusColor),
+            'Created'  => $session['created_at'] ?? '',
+            'Messages' => $session['message_count'] ?? 0,
+        ]);
 
         $transcript = $sessions->getTranscript($id);
         if (!empty($transcript)) {
-            CLI::write('--- Transcript ---', 'yellow');
+            $ui->newLine();
+            $ui->divider('Transcript', 'bright_yellow');
+            $ui->newLine();
+
             foreach ($transcript as $event) {
                 $role = $event['role'] ?? 'system';
-                $type = $event['event_type'] ?? 'message';
                 $content = $event['content'] ?? '';
                 $time = $event['timestamp'] ?? '';
 
-                $color = match ($role) {
-                    'user' => 'cyan',
-                    'assistant' => 'white',
-                    default => 'dark_gray',
+                $roleStyle = match ($role) {
+                    'user'      => ['bright_cyan', 'U'],
+                    'assistant' => ['bright_green', 'A'],
+                    default     => ['gray', 'S'],
                 };
 
-                $prefix = strtoupper(substr($role, 0, 1));
-                CLI::write("[{$time}] [{$prefix}] " . mb_substr($content, 0, 200), $color);
+                $prefix = $ui->style("[{$time}]", 'gray')
+                        . ' ' . $ui->style("[{$roleStyle[1]}]", $roleStyle[0]);
+                echo "  {$prefix} " . mb_substr($content, 0, 200) . "\n";
             }
         }
+        $ui->newLine();
     }
 }

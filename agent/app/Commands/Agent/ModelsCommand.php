@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\ConfigLoader;
 use App\Libraries\Service\ProviderManager;
+use App\Libraries\UI\TerminalUI;
 
 class ModelsCommand extends BaseCommand
 {
@@ -15,28 +15,30 @@ class ModelsCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $config = new ConfigLoader();
         $manager = new ProviderManager($config);
         $manager->loadAll();
 
-        CLI::write('=== Available Models ===', 'green');
-        CLI::newLine();
+        $ui->header('Available Models');
 
         foreach ($manager->all() as $name => $provider) {
-            CLI::write("Provider: {$name}", 'cyan');
+            $ui->newLine();
+            $ui->divider($name, 'bright_cyan');
+
             try {
                 $models = $provider->listModels();
                 if (empty($models)) {
-                    CLI::write('  (no models listed)');
+                    $ui->dim('No models listed');
                 } else {
                     foreach ($models as $m) {
-                        CLI::write("  - {$m['name']}");
+                        $ui->bullet($m['name'] ?? 'unknown', 'white');
                     }
                 }
             } catch (\Throwable $e) {
-                CLI::write("  Error: " . $e->getMessage(), 'red');
+                $ui->error($e->getMessage());
             }
-            CLI::newLine();
         }
+        $ui->newLine();
     }
 }

@@ -3,8 +3,8 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\ConfigLoader;
+use App\Libraries\UI\TerminalUI;
 
 class RolesCommand extends BaseCommand
 {
@@ -14,20 +14,27 @@ class RolesCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $config = new ConfigLoader();
         $roles = $config->get('roles', 'roles', []);
 
-        CLI::write('=== Model Roles ===', 'green');
-        CLI::newLine();
+        $ui->header('Model Roles');
 
+        $rows = [];
         foreach ($roles as $name => $cfg) {
-            CLI::write("  {$name}:", 'cyan');
-            CLI::write("    Provider: {$cfg['provider']} / Model: {$cfg['model']}");
-            CLI::write("    Timeout: {$cfg['timeout']}s / Retry: {$cfg['retry']}");
-            if (!empty($cfg['fallback'])) {
-                CLI::write("    Fallback: " . implode(', ', $cfg['fallback']));
-            }
-            CLI::write("    {$cfg['description']}", 'light_gray');
+            $fallback = !empty($cfg['fallback']) ? implode(', ', $cfg['fallback']) : $ui->style('none', 'gray');
+            $rows[] = [
+                $ui->style($name, 'bright_cyan'),
+                $cfg['provider'] ?? '',
+                $cfg['model'] ?? '',
+                "{$cfg['timeout']}s",
+                $fallback,
+                $cfg['description'] ?? '',
+            ];
         }
+
+        $ui->newLine();
+        $ui->table(['Role', 'Provider', 'Model', 'Timeout', 'Fallback', 'Description'], $rows, 'blue');
+        $ui->newLine();
     }
 }

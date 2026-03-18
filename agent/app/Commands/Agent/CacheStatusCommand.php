@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Cache\CacheManager;
+use App\Libraries\UI\TerminalUI;
 
 class CacheStatusCommand extends BaseCommand
 {
@@ -15,16 +15,26 @@ class CacheStatusCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $cache = new CacheManager(new FileStorage());
         $status = $cache->getStatus();
 
-        CLI::write('=== Cache Status ===', 'green');
-        CLI::write('Enabled: ' . ($status['enabled'] ? 'yes' : 'no'));
-        CLI::newLine();
+        $ui->header('Cache Status');
+        $ui->newLine();
 
-        foreach ($status['categories'] as $cat => $info) {
-            $sizeMb = round($info['size_bytes'] / 1024 / 1024, 2);
-            CLI::write("  {$cat}: {$info['entries']} entries, {$sizeMb} MB");
+        $enabled = $status['enabled'] ?? false;
+        $ui->check('Cache enabled', $enabled);
+        $ui->newLine();
+
+        $rows = [];
+        foreach ($status['categories'] ?? [] as $cat => $info) {
+            $sizeMb = round(($info['size_bytes'] ?? 0) / 1024 / 1024, 2);
+            $rows[] = [$cat, $info['entries'] ?? 0, "{$sizeMb} MB"];
         }
+
+        if (!empty($rows)) {
+            $ui->table(['Category', 'Entries', 'Size'], $rows, 'blue');
+        }
+        $ui->newLine();
     }
 }

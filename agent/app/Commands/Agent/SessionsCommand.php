@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Session\SessionManager;
+use App\Libraries\UI\TerminalUI;
 
 class SessionsCommand extends BaseCommand
 {
@@ -15,23 +15,45 @@ class SessionsCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $sessions = new SessionManager(new FileStorage());
         $list = $sessions->list();
 
-        CLI::write('=== Sessions ===', 'green');
-        CLI::newLine();
+        $ui->header('Sessions');
 
         if (empty($list)) {
-            CLI::write('  No sessions yet.', 'light_gray');
+            $ui->newLine();
+            $ui->dim('No sessions yet. Start one with: php spark agent:chat');
+            $ui->newLine();
             return;
         }
 
         $activeId = $sessions->getActiveId();
+        $rows = [];
+
         foreach ($list as $s) {
-            $marker = ($s['id'] === $activeId) ? ' *' : '';
-            $color = ($s['status'] ?? 'active') === 'active' ? 'white' : 'dark_gray';
-            CLI::write("  [{$s['status']}] {$s['id']} - {$s['name']}{$marker}", $color);
-            CLI::write("    Created: {$s['created_at']}", 'light_gray');
+            $isActive = $s['id'] === $activeId;
+            $statusColor = match($s['status'] ?? 'active') {
+                'active'   => 'bright_green',
+                'archived' => 'gray',
+                default    => 'white',
+            };
+
+            $name = $s['name'];
+            if ($isActive) {
+                $name .= $ui->style(' *', 'bright_yellow');
+            }
+
+            $rows[] = [
+                $ui->style($s['status'] ?? 'active', $statusColor),
+                $name,
+                $s['id'],
+                $s['created_at'] ?? '',
+            ];
         }
+
+        $ui->newLine();
+        $ui->table(['Status', 'Name', 'ID', 'Created'], $rows, 'blue');
+        $ui->newLine();
     }
 }

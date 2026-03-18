@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Memory\MemoryManager;
+use App\Libraries\UI\TerminalUI;
 
 class MemoryShowCommand extends BaseCommand
 {
@@ -15,31 +15,41 @@ class MemoryShowCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $memory = new MemoryManager(new FileStorage());
         $stats = $memory->getStats();
 
-        CLI::write('=== Memory ===', 'green');
-        CLI::write("Global notes: {$stats['global_notes']}");
-        CLI::write("Summaries: {$stats['total_summaries']}");
-        CLI::write("Compactions: {$stats['compaction_count']}");
-        CLI::write("Last compaction: " . ($stats['last_compaction'] ?? 'never'));
+        $ui->header('Memory');
+        $ui->newLine();
 
-        CLI::newLine();
+        $ui->keyValue([
+            'Global notes'     => $stats['global_notes'] ?? 0,
+            'Summaries'        => $stats['total_summaries'] ?? 0,
+            'Compactions'      => $stats['compaction_count'] ?? 0,
+            'Last compaction'  => $stats['last_compaction'] ?? $ui->style('never', 'gray'),
+        ]);
+
         $summary = $memory->getGlobalSummary();
         if ($summary) {
-            CLI::write('--- Global Summary ---', 'yellow');
-            CLI::write($summary);
+            $ui->newLine();
+            $ui->divider('Global Summary', 'bright_yellow');
+            $ui->newLine();
+            $ui->write("  {$summary}", 'white');
         }
 
-        CLI::newLine();
         $notes = $memory->getGlobalNotes();
         $recent = array_slice($notes, -10);
         if (!empty($recent)) {
-            CLI::write('--- Recent Notes ---', 'yellow');
+            $ui->newLine();
+            $ui->divider('Recent Notes', 'bright_yellow');
+            $ui->newLine();
             foreach ($recent as $note) {
                 $content = $note['content'] ?? $note['text'] ?? '(empty)';
-                CLI::write("  [{$note['timestamp']}] " . mb_substr($content, 0, 120), 'light_gray');
+                $time = $note['timestamp'] ?? '';
+                $ui->inline($ui->style("  [{$time}] ", 'gray'));
+                echo mb_substr($content, 0, 120) . "\n";
             }
         }
+        $ui->newLine();
     }
 }

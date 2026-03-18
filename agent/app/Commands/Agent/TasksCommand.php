@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Tasks\TaskManager;
+use App\Libraries\UI\TerminalUI;
 
 class TasksCommand extends BaseCommand
 {
@@ -15,26 +15,39 @@ class TasksCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $tasks = new TaskManager(new FileStorage());
         $list = $tasks->list();
 
-        CLI::write('=== Tasks ===', 'green');
-        CLI::newLine();
+        $ui->header('Tasks');
 
         if (empty($list)) {
-            CLI::write('  No tasks.', 'light_gray');
+            $ui->newLine();
+            $ui->dim('No tasks');
+            $ui->newLine();
             return;
         }
 
+        $rows = [];
         foreach ($list as $t) {
-            $color = match ($t['status'] ?? '') {
-                'completed' => 'green',
-                'running' => 'yellow',
-                'failed' => 'red',
-                'cancelled' => 'dark_gray',
-                default => 'white',
+            $statusColor = match ($t['status'] ?? '') {
+                'completed' => 'bright_green',
+                'running'   => 'bright_yellow',
+                'failed'    => 'bright_red',
+                'cancelled' => 'gray',
+                'pending'   => 'white',
+                default     => 'white',
             };
-            CLI::write("  [{$t['status']}] {$t['id']}: {$t['title']}", $color);
+
+            $rows[] = [
+                $ui->style($t['status'] ?? '?', $statusColor),
+                $t['id'] ?? '',
+                $t['title'] ?? '',
+            ];
         }
+
+        $ui->newLine();
+        $ui->table(['Status', 'ID', 'Title'], $rows, 'blue');
+        $ui->newLine();
     }
 }

@@ -3,8 +3,8 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
+use App\Libraries\UI\TerminalUI;
 
 class StatusCommand extends BaseCommand
 {
@@ -14,32 +14,43 @@ class StatusCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $storage = new FileStorage();
 
-        CLI::write('=== PHPClaw Agent Status ===', 'green');
-        CLI::newLine();
+        $ui->header('PHPClaw Agent Status');
 
         // Service state
         $state = $storage->readJson('state/service.json') ?? [];
-        CLI::write('Service: ' . ($state['status'] ?? 'unknown'), 'cyan');
-        if (isset($state['pid'])) CLI::write('PID: ' . $state['pid']);
-        if (isset($state['started_at'])) CLI::write('Started: ' . $state['started_at']);
+        $serviceStatus = $state['status'] ?? 'unknown';
+        $statusColor = match($serviceStatus) {
+            'running' => 'bright_green',
+            'stopped' => 'yellow',
+            default   => 'gray',
+        };
 
         // Heartbeat
         $heartbeat = $storage->readJson('state/heartbeat.json') ?? [];
-        CLI::write('Last heartbeat: ' . ($heartbeat['last_check'] ?? 'never'));
 
         // Loop state
         $loop = $storage->readJson('state/loop.json') ?? [];
-        CLI::write('Loop iteration: ' . ($loop['iteration'] ?? 0));
 
         // Active tasks
         $active = $storage->readJson('state/active-tasks.json') ?? ['tasks' => []];
-        CLI::write('Active tasks: ' . count($active['tasks']));
 
         // Sessions
         $sessions = $storage->readJson('sessions/index.json') ?? ['sessions' => []];
-        CLI::write('Sessions: ' . count($sessions['sessions']));
-        CLI::write('Active session: ' . ($sessions['active_session'] ?? 'none'));
+
+        $ui->newLine();
+        $ui->keyValue([
+            'Service'        => $ui->style($serviceStatus, $statusColor),
+            'PID'            => $state['pid'] ?? $ui->style('none', 'gray'),
+            'Started'        => $state['started_at'] ?? $ui->style('never', 'gray'),
+            'Last heartbeat' => $heartbeat['last_check'] ?? $ui->style('never', 'gray'),
+            'Loop iteration' => $loop['iteration'] ?? 0,
+            'Active tasks'   => count($active['tasks']),
+            'Sessions'       => count($sessions['sessions']),
+            'Active session'  => $sessions['active_session'] ?? $ui->style('none', 'gray'),
+        ]);
+        $ui->newLine();
     }
 }

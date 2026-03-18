@@ -3,7 +3,6 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\FileStorage;
 use App\Libraries\Storage\ConfigLoader;
 use App\Libraries\Session\SessionManager;
@@ -13,16 +12,13 @@ use App\Libraries\Router\ModelRouter;
 use App\Libraries\Memory\MemoryManager;
 use App\Libraries\Agent\AgentExecutor;
 use App\Libraries\Agent\PromptBuilder;
+use App\Libraries\UI\TerminalUI;
 
 /**
  * Interactive chat REPL - the primary user interface for PHPClaw.
  *
- * This is a real agent shell, not a dumb chat passthrough. The agent:
- * - Has access to all registered tools (file ops, shell, http, etc.)
- * - Parses tool calls from LLM responses and executes them
- * - Feeds tool results back to the LLM for multi-step reasoning
- * - Strips thinking/reasoning tags from model output
- * - Logs all activity to session transcripts
+ * Uses TerminalUI for proper readline input (no backspace issues),
+ * styled output, and a clean visual design.
  */
 class ChatCommand extends BaseCommand
 {
@@ -31,6 +27,7 @@ class ChatCommand extends BaseCommand
     protected $description = 'Start interactive agent chat session';
     protected $usage = 'agent:chat [session_name]';
 
+    private TerminalUI $ui;
     private FileStorage $storage;
     private ConfigLoader $config;
     private SessionManager $sessions;
@@ -46,6 +43,7 @@ class ChatCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $this->ui = new TerminalUI();
         $this->storage = new FileStorage();
         $this->config = new ConfigLoader($this->storage);
         $this->sessions = new SessionManager($this->storage);
@@ -87,13 +85,10 @@ class ChatCommand extends BaseCommand
         // REPL loop
         while (true) {
             $route = $this->router->resolveRole($this->currentRole);
-            $prompt = CLI::prompt("[{$this->currentModule}:{$route['provider']}]");
+            $input = $this->ui->chatPrompt($this->currentModule, $route['provider']);
 
-            if ($prompt === false || $prompt === null) {
-                break;
-            }
-
-            $input = trim($prompt);
+            if ($input === null) break;
+            $input = trim($input);
             if ($input === '') continue;
 
             // Handle slash commands
@@ -115,26 +110,32 @@ class ChatCommand extends BaseCommand
 
             $conversationHistory[] = ['role' => 'user', 'content' => $input];
 
-            // Build system prompt with tool descriptions
+            // Build system prompt
             $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule);
 
-            // Execute agent loop (LLM -> tools -> LLM -> ... -> final response)
-            CLI::write('', 'yellow');
+            // Show thinking indicator
+            $this->ui->newLine();
+            $this->ui->thinking();
+
+            // Execute agent loop
             $response = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
 
+            // Clear thinking indicator and show response
+            $this->ui->thinkingDone();
+
             if ($response) {
-                CLI::newLine();
-                CLI::write($response, 'white');
-                CLI::newLine();
+                $this->ui->agentResponse($response);
             }
 
             if ($this->debugMode) {
-                CLI::write('[Debug] Role: ' . $this->currentRole . ' Provider: ' . $route['provider'] . ' Model: ' . $route['model'], 'dark_gray');
-                CLI::write('[Debug] History: ' . count($conversationHistory) . ' messages', 'dark_gray');
+                $this->ui->dim("[Debug] Role: {$this->currentRole} | Provider: {$route['provider']} | Model: {$route['model']}");
+                $this->ui->dim("[Debug] History: " . count($conversationHistory) . " messages");
             }
         }
 
-        CLI::write('Session saved. Goodbye!', 'green');
+        $this->ui->newLine();
+        $this->ui->success('Session saved. Goodbye!');
+        $this->ui->newLine();
     }
 
     private function initSession(?string $sessionName): string
@@ -144,17 +145,16 @@ class ChatCommand extends BaseCommand
             foreach ($sessions as $s) {
                 if ($s['name'] === $sessionName || $s['id'] === $sessionName) {
                     $session = $this->sessions->resume($s['id']);
-                    CLI::write("Resumed session: {$session['name']}", 'green');
+                    $this->ui->info("Resumed session: {$session['name']}");
                     return $session['id'];
                 }
             }
             $session = $this->sessions->create($sessionName);
-            CLI::write("Created session: {$session['name']}", 'green');
+            $this->ui->info("Created session: {$session['name']}");
             return $session['id'];
         }
 
         $session = $this->sessions->create();
-        CLI::write("New session: {$session['name']}", 'green');
         return $session['id'];
     }
 
@@ -175,22 +175,27 @@ class ChatCommand extends BaseCommand
                 $this->showProviders();
                 break;
             case '/model':
-                CLI::write("Current: " . json_encode($this->router->resolveRole($this->currentRole)), 'cyan');
+                $route = $this->router->resolveRole($this->currentRole);
+                $this->ui->keyValue([
+                    'Provider' => $route['provider'],
+                    'Model'    => $route['model'],
+                    'Role'     => $this->currentRole,
+                ]);
                 break;
             case '/role':
                 if ($arg) {
                     $this->currentRole = $arg;
-                    CLI::write("Role set to: {$arg}", 'green');
+                    $this->ui->success("Role set to: {$arg}");
                 } else {
-                    CLI::write("Current role: {$this->currentRole}", 'cyan');
+                    $this->ui->info("Current role: {$this->currentRole}");
                 }
                 break;
             case '/module':
                 if ($arg) {
                     $this->currentModule = $arg;
-                    CLI::write("Module set to: {$arg}", 'green');
+                    $this->ui->success("Module set to: {$arg}");
                 } else {
-                    CLI::write("Current module: {$this->currentModule}", 'cyan');
+                    $this->ui->info("Current module: {$this->currentModule}");
                 }
                 break;
             case '/tools':
@@ -208,86 +213,129 @@ class ChatCommand extends BaseCommand
             case '/debug':
                 $this->debugMode = !$this->debugMode;
                 $this->agent->setDebug($this->debugMode);
-                CLI::write('Debug mode: ' . ($this->debugMode ? 'ON' : 'OFF'), 'yellow');
+                $status = $this->debugMode ? 'ON' : 'OFF';
+                $this->ui->info("Debug mode: {$status}");
                 break;
             case '/save':
-                CLI::write("Session auto-saved: {$sessionId}", 'green');
+                $this->ui->success("Session auto-saved: {$sessionId}");
                 break;
             default:
-                CLI::write("Unknown command: {$cmd}. Type /help for available commands.", 'red');
+                $this->ui->warn("Unknown command: {$cmd}. Type /help for help.");
         }
         return null;
     }
 
     private function printBanner(): void
     {
-        CLI::newLine();
-        CLI::write('================================', 'green');
-        CLI::write('  PHPClaw Agent Shell v0.1.0', 'green');
-        CLI::write('================================', 'green');
-        CLI::write('Type /help for commands, /exit to quit.', 'light_gray');
-        CLI::write('Tools: ' . count($this->tools->all()) . ' loaded', 'light_gray');
-        CLI::newLine();
+        $toolCount = count($this->tools->all());
+        $enabledProviders = count($this->providers->listEnabled());
+
+        $this->ui->banner('PHPClaw Agent Shell', 'v0.1.0');
+
+        $this->ui->keyValue([
+            'Tools'     => "{$toolCount} loaded",
+            'Providers' => "{$enabledProviders} active",
+            'Module'    => $this->currentModule,
+        ], 'bright_cyan');
+
+        $this->ui->newLine();
+        $this->ui->dim('Type /help for commands, /exit to quit');
+        $this->ui->hr();
     }
 
     private function printHelp(): void
     {
-        CLI::write('Slash Commands:', 'yellow');
-        CLI::write('  /help       Show this help');
-        CLI::write('  /provider   Show active providers');
-        CLI::write('  /model      Show current model routing');
-        CLI::write('  /role [r]   Show or set current role');
-        CLI::write('  /module [m] Show or set current module');
-        CLI::write('  /tools      List available tools');
-        CLI::write('  /tasks      Show active tasks');
-        CLI::write('  /memory     Show memory stats');
-        CLI::write('  /status     Show system status');
-        CLI::write('  /debug      Toggle debug mode');
-        CLI::write('  /save       Confirm session save');
-        CLI::write('  /exit       Exit chat');
+        $this->ui->slashHelp([
+            '/help'       => 'Show this help',
+            '/exit'       => 'Exit chat',
+            '/provider'   => 'Show active providers',
+            '/model'      => 'Show current model routing',
+            '/role [r]'   => 'Show or set current role',
+            '/module [m]' => 'Show or set current module',
+            '/tools'      => 'List available tools',
+            '/tasks'      => 'Show active tasks',
+            '/memory'     => 'Show memory stats',
+            '/status'     => 'Show system status',
+            '/debug'      => 'Toggle debug mode',
+            '/save'       => 'Confirm session save',
+        ]);
     }
 
     private function showProviders(): void
     {
+        $rows = [];
         foreach ($this->providers->listEnabled() as $p) {
-            CLI::write("  {$p['name']}: {$p['description']}", 'cyan');
+            $rows[] = [
+                $this->ui->style($p['name'], 'bright_cyan'),
+                $p['description'] ?? '',
+            ];
         }
+        $this->ui->table(['Provider', 'Description'], $rows, 'blue');
     }
 
     private function showTools(): void
     {
+        $rows = [];
         foreach ($this->tools->listAll() as $t) {
-            $status = $t['enabled'] ? 'ON' : 'OFF';
-            CLI::write("  [{$status}] {$t['name']}: {$t['description']}");
+            $status = ($t['enabled'] ?? false)
+                ? $this->ui->style('ON', 'bright_green')
+                : $this->ui->style('OFF', 'red');
+            $rows[] = [$status, $t['name'], $t['description'] ?? ''];
         }
+        $this->ui->table(['', 'Tool', 'Description'], $rows, 'blue');
     }
 
     private function showTasks(): void
     {
         $tasks = (new \App\Libraries\Tasks\TaskManager($this->storage))->list();
         if (empty($tasks)) {
-            CLI::write('  No tasks.', 'light_gray');
+            $this->ui->dim('No active tasks');
             return;
         }
+        $rows = [];
         foreach ($tasks as $t) {
-            CLI::write("  [{$t['status']}] {$t['id']}: {$t['title']}");
+            $statusColor = match($t['status'] ?? '') {
+                'running'  => 'bright_green',
+                'pending'  => 'yellow',
+                'failed'   => 'red',
+                'complete' => 'green',
+                default    => 'gray',
+            };
+            $rows[] = [
+                $this->ui->style($t['status'] ?? '?', $statusColor),
+                $t['id'] ?? '',
+                $t['title'] ?? '',
+            ];
         }
+        $this->ui->table(['Status', 'ID', 'Title'], $rows, 'blue');
     }
 
     private function showMemory(): void
     {
         $stats = $this->memory->getStats();
-        CLI::write("  Global notes: {$stats['global_notes']}");
-        CLI::write("  Summaries: {$stats['total_summaries']}");
-        CLI::write("  Compactions: {$stats['compaction_count']}");
-        CLI::write("  Last compaction: " . ($stats['last_compaction'] ?? 'never'));
+        $this->ui->keyValue([
+            'Global notes' => $stats['global_notes'] ?? 0,
+            'Summaries'    => $stats['total_summaries'] ?? 0,
+            'Compactions'  => $stats['compaction_count'] ?? 0,
+            'Last compact' => $stats['last_compaction'] ?? 'never',
+        ]);
     }
 
     private function showStatus(): void
     {
         $state = $this->storage->readJson('state/service.json') ?? [];
-        CLI::write("  Service: " . ($state['status'] ?? 'unknown'), 'cyan');
         $heartbeat = $this->storage->readJson('state/heartbeat.json') ?? [];
-        CLI::write("  Last heartbeat: " . ($heartbeat['last_check'] ?? 'never'));
+
+        $serviceStatus = $state['status'] ?? 'unknown';
+        $statusColor = match($serviceStatus) {
+            'running' => 'bright_green',
+            'stopped' => 'yellow',
+            default   => 'gray',
+        };
+
+        $this->ui->keyValue([
+            'Service'        => $this->ui->style($serviceStatus, $statusColor),
+            'Last heartbeat' => $heartbeat['last_check'] ?? 'never',
+        ]);
     }
 }

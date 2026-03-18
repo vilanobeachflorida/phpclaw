@@ -5,7 +5,7 @@ namespace App\Libraries\Agent;
 use App\Libraries\Router\ModelRouter;
 use App\Libraries\Service\ToolRegistry;
 use App\Libraries\Session\SessionManager;
-use CodeIgniter\CLI\CLI;
+use App\Libraries\UI\TerminalUI;
 
 /**
  * Core agent execution loop.
@@ -25,6 +25,7 @@ class AgentExecutor
     private ModelRouter $router;
     private ToolRegistry $tools;
     private ResponseParser $parser;
+    private TerminalUI $ui;
     private ?SessionManager $sessions;
     private ?string $sessionId;
     private bool $debug;
@@ -45,6 +46,7 @@ class AgentExecutor
         $this->router = $router;
         $this->tools = $tools;
         $this->parser = new ResponseParser();
+        $this->ui = new TerminalUI();
         $this->debug = $debug;
         $this->sessions = $sessions;
         $this->sessionId = $sessionId;
@@ -84,21 +86,21 @@ class AgentExecutor
             );
 
             if ($this->debug) {
-                CLI::write("[Agent] Iteration {$iteration}, {$totalToolCalls} total tool calls, " . count($messages) . " messages", 'dark_gray');
+                $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} total tool calls, " . count($messages) . " messages");
             }
 
             $response = $this->router->chat($role, $messages);
 
             if (!($response['success'] ?? false)) {
                 $error = $response['error'] ?? 'Unknown error';
-                CLI::error("Provider error: {$error}");
+                $this->ui->error("Provider error: {$error}");
                 return "Error: {$error}";
             }
 
             $rawContent = $response['content'] ?? '';
 
             if ($this->debug) {
-                CLI::write("[Agent] Raw response length: " . strlen($rawContent), 'dark_gray');
+                $this->ui->dim("[Agent] Raw response length: " . strlen($rawContent));
             }
 
             // Parse the response
@@ -107,9 +109,8 @@ class AgentExecutor
             // Show any display text before tool calls
             if ($parsed['display']) {
                 $allDisplayText[] = $parsed['display'];
-                // Print intermediate text so user sees progress
                 if ($parsed['has_tool_calls']) {
-                    CLI::write($parsed['display'], 'white');
+                    $this->ui->write("  {$parsed['display']}", 'white');
                 }
             }
 
@@ -120,7 +121,7 @@ class AgentExecutor
                 $this->logTranscript('assistant_message', 'assistant', $finalText, $response);
 
                 if ($this->debug) {
-                    CLI::write("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls", 'dark_gray');
+                    $this->ui->dim("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls");
                 }
                 return $finalText;
             }
@@ -136,7 +137,6 @@ class AgentExecutor
                     if ($stuckResult !== null) {
                         return $stuckResult;
                     }
-                    // User said continue - reset detection
                     $repeatCount = 0;
                     $previousCallSignatures = [];
                     continue;
@@ -166,7 +166,6 @@ class AgentExecutor
                     if ($stuckResult !== null) {
                         return $stuckResult;
                     }
-                    // User said continue
                     $consecutiveFailures = 0;
                     continue;
                 }
@@ -187,12 +186,17 @@ class AgentExecutor
      */
     private function handleStuck(string $reason, array &$allDisplayText, array &$conversationHistory): ?string
     {
-        CLI::newLine();
-        CLI::write("Agent appears stuck: {$reason}", 'yellow');
-        $choice = CLI::prompt('  (c)ontinue, (s)top, or give new (i)nstructions?', 'c');
+        $this->ui->newLine();
+        $this->ui->warnBox("Agent appears stuck: {$reason}");
 
-        switch (strtolower(substr($choice, 0, 1))) {
-            case 's':
+        $choice = $this->ui->menu('What would you like to do?', [
+            ['label' => 'Continue',         'description' => 'Let the agent keep trying'],
+            ['label' => 'New instructions',  'description' => 'Give the agent new directions'],
+            ['label' => 'Stop',             'description' => 'End this turn'],
+        ]);
+
+        switch ($choice) {
+            case 2: // Stop
                 $finalText = implode("\n\n", $allDisplayText);
                 if (empty($finalText)) {
                     $finalText = "(Stopped by user)";
@@ -200,15 +204,15 @@ class AgentExecutor
                 $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
                 return $finalText;
 
-            case 'i':
-                $instruction = CLI::prompt('  Enter instructions');
+            case 1: // New instructions
+                $instruction = $this->ui->prompt('Enter instructions');
                 if ($instruction) {
                     $conversationHistory[] = ['role' => 'user', 'content' => $instruction];
                 }
-                return null; // Continue with new instructions
+                return null;
 
-            default:
-                return null; // Continue
+            default: // Continue
+                return null;
         }
     }
 
@@ -223,22 +227,18 @@ class AgentExecutor
             $toolName = $call['name'];
             $toolArgs = $call['args'] ?? [];
 
-            CLI::write("  > {$toolName}", 'cyan');
-
             if ($this->debug) {
-                CLI::write("    Args: " . json_encode($toolArgs, JSON_UNESCAPED_SLASHES), 'dark_gray');
+                $this->ui->dim("    Args: " . json_encode($toolArgs, JSON_UNESCAPED_SLASHES));
             }
 
             $result = $this->tools->execute($toolName, $toolArgs);
-
             $success = $result['success'] ?? false;
-            $statusColor = $success ? 'green' : 'red';
-            $statusText = $success ? 'ok' : 'FAILED';
-            CLI::write("    [{$statusText}]", $statusColor);
 
+            $detail = '';
             if (!$success) {
-                CLI::write("    " . ($result['error'] ?? 'unknown error'), 'red');
+                $detail = $result['error'] ?? 'unknown error';
             }
+            $this->ui->toolCall($toolName, $success, $detail);
 
             $this->logToolEvent($toolName, $toolArgs, $result, $providerResponse);
 

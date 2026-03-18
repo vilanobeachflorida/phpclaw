@@ -3,8 +3,8 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\ConfigLoader;
+use App\Libraries\UI\TerminalUI;
 
 class ModulesCommand extends BaseCommand
 {
@@ -14,20 +14,29 @@ class ModulesCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $config = new ConfigLoader();
         $modules = $config->get('modules', 'modules', []);
 
-        CLI::write('=== Modules ===', 'green');
-        CLI::newLine();
+        $ui->header('Modules');
 
+        $rows = [];
         foreach ($modules as $name => $cfg) {
-            $status = ($cfg['enabled'] ?? false) ? 'ON' : 'OFF';
-            $color = ($cfg['enabled'] ?? false) ? 'green' : 'dark_gray';
-            CLI::write("  [{$status}] {$name}: {$cfg['description']}", $color);
-            CLI::write("    Role: " . ($cfg['role'] ?? 'default'));
-            if (!empty($cfg['tools'])) {
-                CLI::write("    Tools: " . implode(', ', $cfg['tools']));
-            }
+            $status = ($cfg['enabled'] ?? false)
+                ? $ui->style('ON', 'bright_green')
+                : $ui->style('OFF', 'red');
+            $tools = !empty($cfg['tools']) ? implode(', ', $cfg['tools']) : $ui->style('none', 'gray');
+            $rows[] = [
+                $status,
+                $ui->style($name, 'bright_cyan'),
+                $cfg['role'] ?? 'default',
+                $tools,
+                $cfg['description'] ?? '',
+            ];
         }
+
+        $ui->newLine();
+        $ui->table(['', 'Module', 'Role', 'Tools', 'Description'], $rows, 'blue');
+        $ui->newLine();
     }
 }

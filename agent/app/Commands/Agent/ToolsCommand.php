@@ -3,9 +3,9 @@
 namespace App\Commands\Agent;
 
 use CodeIgniter\CLI\BaseCommand;
-use CodeIgniter\CLI\CLI;
 use App\Libraries\Storage\ConfigLoader;
 use App\Libraries\Service\ToolRegistry;
+use App\Libraries\UI\TerminalUI;
 
 class ToolsCommand extends BaseCommand
 {
@@ -15,17 +15,23 @@ class ToolsCommand extends BaseCommand
 
     public function run(array $params)
     {
+        $ui = new TerminalUI();
         $config = new ConfigLoader();
         $registry = new ToolRegistry($config);
         $registry->loadAll();
 
-        CLI::write('=== Tools ===', 'green');
-        CLI::newLine();
+        $ui->header('Tools');
 
+        $rows = [];
         foreach ($registry->listAll() as $tool) {
-            $status = $tool['enabled'] ? 'ON' : 'OFF';
-            $color = $tool['enabled'] ? 'white' : 'dark_gray';
-            CLI::write("  [{$status}] {$tool['name']}: {$tool['description']}", $color);
+            $status = $tool['enabled']
+                ? $ui->style('ON', 'bright_green')
+                : $ui->style('OFF', 'red');
+            $rows[] = [$status, $tool['name'], $tool['description'] ?? ''];
         }
+
+        $ui->newLine();
+        $ui->table(['', 'Tool', 'Description'], $rows, 'blue');
+        $ui->newLine();
     }
 }
