@@ -1,0 +1,1 @@
+<?php // CLI-only app
