@@ -12,7 +12,10 @@ use App\Libraries\Tools\{
     MemoryWriteTool, MemoryReadTool,
     GitOpsTool, CodePatchTool, DbQueryTool, ImageGenerateTool,
     CronScheduleTool, DiffReviewTool, HttpRequestTool,
-    ArchiveExtractTool, ProcessManagerTool, NotificationSendTool
+    ArchiveExtractTool, ProcessManagerTool, NotificationSendTool,
+    ExecTargetTool, ProjectDetectTool, TestRunnerTool,
+    LintCheckTool, CodeSymbolsTool, TaskPlannerTool,
+    BuildRunnerTool, ErrorParserTool, ContextManagerTool
 };
 
 /**
@@ -49,6 +52,15 @@ class ToolRegistry
         'archive_extract' => ArchiveExtractTool::class,
         'process_manager' => ProcessManagerTool::class,
         'notification_send' => NotificationSendTool::class,
+        'exec_target'       => ExecTargetTool::class,
+        'project_detect'    => ProjectDetectTool::class,
+        'test_runner'       => TestRunnerTool::class,
+        'lint_check'        => LintCheckTool::class,
+        'code_symbols'      => CodeSymbolsTool::class,
+        'task_planner'      => TaskPlannerTool::class,
+        'build_runner'      => BuildRunnerTool::class,
+        'error_parser'      => ErrorParserTool::class,
+        'context_manager'   => ContextManagerTool::class,
     ];
 
     public function __construct(?ConfigLoader $config = null)

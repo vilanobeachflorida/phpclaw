@@ -115,7 +115,7 @@ There's no iteration limit. The agent runs until it's done. If it gets stuck (sa
 
 ## Built-in Tools
 
-PHPClaw ships with 25 built-in tools across several categories:
+PHPClaw ships with 34 built-in tools across several categories:
 
 ### File Operations
 
@@ -131,6 +131,19 @@ PHPClaw ships with 25 built-in tools across several categories:
 | `code_patch` | Surgical code editing via exact string replacement |
 | `archive_extract` | Create and extract archives (ZIP, tar.gz, tar.bz2) |
 
+### Coding & Development
+
+| Tool | Description |
+|------|-------------|
+| `project_detect` | Auto-detect project languages, frameworks, test runners, linters, and build systems |
+| `test_runner` | Detect and run tests for any language, returning structured pass/fail results |
+| `lint_check` | Detect and run linters/formatters for any language with structured diagnostics |
+| `code_symbols` | Language-agnostic code intelligence: find definitions, references, and outlines (via ctags or regex) |
+| `build_runner` | Detect and run build systems, install dependencies, and execute project scripts |
+| `error_parser` | Parse raw error output from any language into structured errors with file, line, and message |
+| `task_planner` | Create and track multi-step plans for complex tasks with persistent checkpoints |
+| `context_manager` | Compress, stash, and recall working context for long coding sessions |
+
 ### Search & Analysis
 
 | Tool | Description |
@@ -138,6 +151,15 @@ PHPClaw ships with 25 built-in tools across several categories:
 | `grep_search` | Search file contents with patterns |
 | `git_ops` | Structured git operations (status, diff, log, blame, branch) |
 | `diff_review` | Analyze code diffs with structured per-hunk output |
+
+### Execution Targets
+
+| Tool | Description |
+|------|-------------|
+| `exec_target` | Manage execution targets (local, SSH, Docker, K8s) and run commands remotely |
+| `shell_exec` | Execute shell commands |
+| `system_info` | Get system information |
+| `process_manager` | Start, monitor, and stop background processes |
 
 ### Network & Web
 
@@ -147,14 +169,6 @@ PHPClaw ships with 25 built-in tools across several categories:
 | `http_request` | Full HTTP client (all methods, headers, body, auth) |
 | `browser_fetch` | Fetch and parse web pages |
 | `browser_text` | Extract text from web pages |
-
-### System & Process
-
-| Tool | Description |
-|------|-------------|
-| `shell_exec` | Execute shell commands |
-| `system_info` | Get system information |
-| `process_manager` | Start, monitor, and stop background processes |
 
 ### Data & Integration
 
@@ -314,7 +328,7 @@ php spark agent:config:reset --file providers  # Reset a single config file
      │  │ LMStudio │  │  │  shell_exec      │
      │  │ ChatGPT  │  │  │  browser_fetch   │
      │  │ Claude   │  │  │  grep_search     │
-     │  │ OpenLLM  │  │  │  ...25 total     │
+     │  │ OpenLLM  │  │  │  ...34 total     │
      │  └──────────┘  │  └─────────────────┘
      └────────────────┘
 ```
@@ -438,7 +452,7 @@ See the `docs/` directory for detailed documentation:
 - [REST API](docs/api.md) — API server, endpoints, authentication, and examples
 - [Architecture](docs/architecture.md) — system design and component overview
 - [Providers](docs/providers.md) — provider configuration and custom adapters
-- [Tools](docs/tools.md) — tool system, all 25 built-in tools, testing, and custom tool development
+- [Tools](docs/tools.md) — tool system, all 34 built-in tools, testing, and custom tool development
 - [Modules](docs/modules.md) — role-based module configuration
 - [Routing](docs/routing.md) — model routing and fallback chains
 - [Memory](docs/memory.md) — memory system, compaction, and summaries

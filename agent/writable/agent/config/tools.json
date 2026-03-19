@@ -95,22 +95,7 @@
             "description": "Generate images from text prompts",
             "timeout": 120,
             "provider": "openai",
-            "output_dir": "writable/agent/generated/images",
-            "openai": {
-                "api_key_env": "OPENAI_API_KEY",
-                "model": "dall-e-3",
-                "size": "1024x1024",
-                "quality": "standard"
-            },
-            "stable_diffusion": {
-                "base_url": "http://localhost:7860",
-                "steps": 30,
-                "width": 1024,
-                "height": 1024
-            },
-            "comfyui": {
-                "base_url": "http://localhost:8188"
-            }
+            "output_dir": "writable/agent/generated/images"
         },
         "cron_schedule": {
             "enabled": true,
@@ -126,14 +111,14 @@
         },
         "http_request": {
             "enabled": true,
-            "description": "Full HTTP client with all methods, headers, and body support",
+            "description": "Full HTTP client with all methods and body support",
             "timeout": 30,
             "max_body_size": 10485760,
             "blocked_hosts": []
         },
         "archive_extract": {
             "enabled": true,
-            "description": "Create and extract archive files (ZIP, tar.gz, tar.bz2)",
+            "description": "Create and extract archive files",
             "timeout": 60,
             "max_extract_size": 104857600
         },
@@ -147,15 +132,80 @@
         },
         "notification_send": {
             "enabled": true,
-            "description": "Send notifications via email, Slack, Discord, Telegram, or desktop",
+            "description": "Send notifications via multiple channels",
             "timeout": 15,
             "channels": {
-                "desktop": { "enabled": true },
-                "slack": { "enabled": false, "webhook_url_env": "SLACK_WEBHOOK_URL" },
-                "discord": { "enabled": false, "webhook_url_env": "DISCORD_WEBHOOK_URL" },
-                "telegram": { "enabled": false, "bot_token_env": "TELEGRAM_BOT_TOKEN", "chat_id_env": "TELEGRAM_CHAT_ID" },
-                "email": { "enabled": false, "smtp_host": "localhost", "smtp_port": 25, "from": "phpclaw@localhost" }
+                "desktop": {
+                    "enabled": true
+                },
+                "slack": {
+                    "enabled": false
+                },
+                "discord": {
+                    "enabled": false
+                },
+                "telegram": {
+                    "enabled": false
+                },
+                "email": {
+                    "enabled": false
+                }
             }
+        },
+        "exec_target": {
+            "enabled": true,
+            "description": "Manage execution targets (local, SSH, Docker, K8s)",
+            "timeout": 30,
+            "active_target": "local"
+        },
+        "project_detect": {
+            "enabled": true,
+            "description": "Auto-detect project stack and toolchain",
+            "timeout": 15
+        },
+        "test_runner": {
+            "enabled": true,
+            "description": "Universal test runner with structured results",
+            "timeout": 120,
+            "junit_output": true
+        },
+        "lint_check": {
+            "enabled": true,
+            "description": "Universal linter/formatter with structured diagnostics",
+            "timeout": 60
+        },
+        "code_symbols": {
+            "enabled": true,
+            "description": "Language-agnostic code intelligence via ctags",
+            "timeout": 30,
+            "tags_file": ".tags",
+            "use_ctags": true,
+            "max_results": 100
+        },
+        "task_planner": {
+            "enabled": true,
+            "description": "Multi-step task planning with persistent checkpoints",
+            "timeout": 10,
+            "plans_dir": "writable/agent/plans",
+            "max_plans": 50
+        },
+        "build_runner": {
+            "enabled": true,
+            "description": "Universal build system and dependency management",
+            "timeout": 120
+        },
+        "error_parser": {
+            "enabled": true,
+            "description": "Parse errors from any language into structured output",
+            "timeout": 10,
+            "max_errors": 100
+        },
+        "context_manager": {
+            "enabled": true,
+            "description": "Context compression, stashing, and recall",
+            "timeout": 15,
+            "stash_dir": "writable/agent/context_stash",
+            "max_stashes": 20
         }
     }
 }

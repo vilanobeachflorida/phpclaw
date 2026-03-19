@@ -46,7 +46,16 @@
                 "shell_exec",
                 "git_ops",
                 "code_patch",
-                "diff_review"
+                "diff_review",
+                "exec_target",
+                "project_detect",
+                "test_runner",
+                "lint_check",
+                "code_symbols",
+                "task_planner",
+                "build_runner",
+                "error_parser",
+                "context_manager"
             ],
             "cache_policy": "none",
             "memory_policy": "full",
