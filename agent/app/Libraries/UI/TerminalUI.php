@@ -858,7 +858,7 @@ class TerminalUI
     }
 
     /**
-     * Display a tool call status.
+     * Display a tool call status (final result).
      */
     public function toolCall(string $name, bool $success, string $detail = ''): void
     {
@@ -866,6 +866,18 @@ class TerminalUI
         $nameStyled = $this->style($name, 'bright_cyan');
         $suffix = $detail ? $this->style(" {$detail}", 'gray') : '';
         echo "    {$icon} {$nameStyled}{$suffix}\n";
+    }
+
+    /**
+     * Display a pending tool call indicator (shown BEFORE execution).
+     * Written inline (no newline) so it can be replaced by the final result.
+     */
+    public function toolPending(string $name, string $detail = ''): void
+    {
+        $icon = $this->style('◇', 'gray');
+        $nameStyled = $this->style($name, 'gray');
+        $suffix = $detail ? $this->style(" {$detail}", 'gray') : '';
+        $this->inline("    {$icon} {$nameStyled}{$suffix}");
     }
 
     /**

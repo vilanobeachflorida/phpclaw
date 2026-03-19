@@ -152,11 +152,12 @@ class AgentExecutor
                 return $this->buildResult($finalText, $allToolsUsed);
             }
 
-            // Show thinking indicator while waiting for LLM
+            // Show thinking indicator with progress context
             if ($iteration > 1) {
                 $this->ui->thinkingDone();
             }
-            $this->ui->thinking($iteration === 1 ? 'Thinking' : 'Working');
+            $thinkingMsg = $this->buildThinkingMessage($iteration, $totalToolCalls);
+            $this->ui->thinking($thinkingMsg);
 
             // Build messages with system prompt
             $messages = array_merge(
@@ -167,6 +168,7 @@ class AgentExecutor
             if ($this->debug) {
                 $this->ui->thinkingDone();
                 $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} tool calls, " . count($messages) . " messages, nudges: {$nudgeCount}");
+                $this->ui->thinking($thinkingMsg);
             }
 
             $response = $this->router->chat($role, $messages);
@@ -216,11 +218,12 @@ class AgentExecutor
             }
 
             // Only accumulate display text if it's a final response (no tool calls)
-            // If this is a repeated "done" response (nudge/review cycle), replace
-            // the previous summary instead of accumulating duplicates.
+            // Deduplicate: if the new text substantially overlaps with the last entry,
+            // replace it instead of appending. This prevents the "Task complete!" x15 problem
+            // that happens when the review/nudge cycle generates repeated summaries.
             if ($parsed['display'] && !$parsed['has_tool_calls']) {
-                if ($nudgeCount > 0 && !empty($allDisplayText)) {
-                    // Replace the last entry — this is a revised completion, not additive
+                if (!empty($allDisplayText) && $this->isRepeatSummary($parsed['display'], end($allDisplayText))) {
+                    // Replace — this is a revised version of the same completion summary
                     $allDisplayText[count($allDisplayText) - 1] = $parsed['display'];
                 } else {
                     $allDisplayText[] = $parsed['display'];
@@ -673,6 +676,144 @@ class AgentExecutor
     }
 
     /**
+     * Build a contextual thinking message based on what's happened so far.
+     */
+    private function buildThinkingMessage(int $iteration, int $totalToolCalls): string
+    {
+        if ($iteration === 1) {
+            // Show a hint of what the agent is working on
+            $request = mb_substr(trim($this->originalRequest), 0, 60);
+            if (mb_strlen($this->originalRequest) > 60) $request .= '...';
+            return $request ? "Reading: {$request}" : 'Thinking';
+        }
+
+        // Show what just happened for context
+        if (!empty($this->completedActions)) {
+            $last = end($this->completedActions);
+            // Extract just the tool name and key detail
+            $parts = explode(':', $last, 2);
+            $lastTool = trim($parts[0]);
+            $lastDetail = isset($parts[1]) ? trim($parts[1]) : '';
+
+            // Build a short context string
+            switch ($lastTool) {
+                case 'file_write':
+                case 'file_append':
+                    $filename = $lastDetail ? basename($lastDetail) : '';
+                    return $filename ? "Wrote {$filename}, continuing" : "Writing files";
+                case 'mkdir':
+                    return "Created directories, continuing";
+                case 'shell_exec':
+                    return "Ran command, continuing";
+                case 'file_read':
+                    $filename = $lastDetail ? basename($lastDetail) : '';
+                    return $filename ? "Read {$filename}, thinking" : "Reading files";
+                case 'grep_search':
+                    return "Searched code, thinking";
+                case 'dir_list':
+                    return "Checked files, continuing";
+                case 'code_patch':
+                    return "Patched code, continuing";
+                case 'test_runner':
+                    return "Ran tests, reviewing";
+                case 'lint_check':
+                    return "Ran linter, reviewing";
+                case 'build_runner':
+                    return "Building project";
+                case 'git_ops':
+                    return "Checked git, continuing";
+                default:
+                    return "Working ({$totalToolCalls} tools used)";
+            }
+        }
+
+        return "Working";
+    }
+
+    /**
+     * Generate a short human-readable description of what a tool call is about to do.
+     */
+    private function describeToolCall(string $tool, array $args): string
+    {
+        switch ($tool) {
+            case 'file_write':
+            case 'file_append':
+                $path = $args['path'] ?? '';
+                return $path ? basename($path) : '';
+            case 'file_read':
+                $path = $args['path'] ?? '';
+                return $path ? basename($path) : '';
+            case 'mkdir':
+                $path = $args['path'] ?? '';
+                return $path ? basename($path) . '/' : '';
+            case 'shell_exec':
+                $cmd = $args['command'] ?? '';
+                return mb_strlen($cmd) > 50 ? mb_substr($cmd, 0, 47) . '...' : $cmd;
+            case 'grep_search':
+                return $args['pattern'] ?? '';
+            case 'dir_list':
+                $path = $args['path'] ?? '.';
+                return basename($path) . '/';
+            case 'code_patch':
+                $path = $args['path'] ?? '';
+                return $path ? basename($path) : '';
+            case 'git_ops':
+                return $args['operation'] ?? '';
+            case 'test_runner':
+            case 'lint_check':
+            case 'build_runner':
+            case 'project_detect':
+                return $args['action'] ?? '';
+            case 'exec_target':
+                return ($args['action'] ?? '') . ($args['target'] ? ' → ' . $args['target'] : '');
+            default:
+                // Use the first string arg as description
+                foreach ($args as $v) {
+                    if (is_string($v) && mb_strlen($v) > 2 && mb_strlen($v) < 60) {
+                        return $v;
+                    }
+                }
+                return '';
+        }
+    }
+
+    /**
+     * Check if a new display text is a repeated/revised version of an existing one.
+     * Catches the pattern where the model says "Task complete!" multiple times
+     * with slightly different wording each time.
+     */
+    private function isRepeatSummary(string $new, string $existing): bool
+    {
+        // If either is very short, don't consider it a repeat
+        if (mb_strlen($new) < 50 || mb_strlen($existing) < 50) return false;
+
+        // Check for shared key phrases that indicate completion summaries
+        $completionPhrases = ['task complete', 'complete!', 'done!', 'ready to use', 'ready!', 'created successfully', 'has been created', 'is complete', 'project is complete', 'all files'];
+        $newLower = strtolower($new);
+        $existingLower = strtolower($existing);
+
+        $newHasCompletion = false;
+        $existingHasCompletion = false;
+        foreach ($completionPhrases as $phrase) {
+            if (str_contains($newLower, $phrase)) $newHasCompletion = true;
+            if (str_contains($existingLower, $phrase)) $existingHasCompletion = true;
+        }
+
+        // Both are completion summaries — this is a repeat
+        if ($newHasCompletion && $existingHasCompletion) return true;
+
+        // Check text similarity — if >40% of words overlap, it's a repeat
+        $newWords = array_unique(str_word_count($newLower, 1));
+        $existingWords = array_unique(str_word_count($existingLower, 1));
+        if (empty($newWords) || empty($existingWords)) return false;
+
+        $overlap = count(array_intersect($newWords, $existingWords));
+        $similarity = $overlap / max(count($newWords), count($existingWords));
+
+        return $similarity > 0.4;
+    }
+
+    /**
      * Show a persistent status line with running token/time stats.
      * Printed as a dim line that stays on screen (not an in-place overwrite).
      */
@@ -840,9 +981,15 @@ class AgentExecutor
                 $this->ui->dim("    Args: " . json_encode($toolArgs, JSON_UNESCAPED_SLASHES));
             }
 
+            // Show what we're about to do BEFORE execution
+            $pendingDetail = $this->describeToolCall($toolName, $toolArgs);
+            $this->ui->toolPending($toolName, $pendingDetail);
+
             $result = $this->tools->execute($toolName, $toolArgs);
             $success = $result['success'] ?? false;
 
+            // Replace the pending line with the final result
+            $this->ui->clearLine();
             $detail = '';
             if (!$success) {
                 $detail = $result['error'] ?? 'unknown error';
