@@ -115,6 +115,10 @@ There's no iteration limit. The agent runs until it's done. If it gets stuck (sa
 
 ## Built-in Tools
 
+PHPClaw ships with 25 built-in tools across several categories:
+
+### File Operations
+
 | Tool | Description |
 |------|-------------|
 | `file_read` | Read file contents |
@@ -124,12 +128,78 @@ There's no iteration limit. The agent runs until it's done. If it gets stuck (sa
 | `mkdir` | Create directories |
 | `move_file` | Move or rename files |
 | `delete_file` | Delete files |
+| `code_patch` | Surgical code editing via exact string replacement |
+| `archive_extract` | Create and extract archives (ZIP, tar.gz, tar.bz2) |
+
+### Search & Analysis
+
+| Tool | Description |
+|------|-------------|
 | `grep_search` | Search file contents with patterns |
-| `shell_exec` | Execute shell commands |
+| `git_ops` | Structured git operations (status, diff, log, blame, branch) |
+| `diff_review` | Analyze code diffs with structured per-hunk output |
+
+### Network & Web
+
+| Tool | Description |
+|------|-------------|
 | `http_get` | Make HTTP GET requests |
+| `http_request` | Full HTTP client (all methods, headers, body, auth) |
 | `browser_fetch` | Fetch and parse web pages |
 | `browser_text` | Extract text from web pages |
+
+### System & Process
+
+| Tool | Description |
+|------|-------------|
+| `shell_exec` | Execute shell commands |
 | `system_info` | Get system information |
+| `process_manager` | Start, monitor, and stop background processes |
+
+### Data & Integration
+
+| Tool | Description |
+|------|-------------|
+| `db_query` | Execute SQL queries (MySQL, PostgreSQL, SQLite) |
+| `image_generate` | Generate images from text prompts (DALL-E, Stable Diffusion, ComfyUI) |
+| `cron_schedule` | Create and manage scheduled recurring tasks |
+| `notification_send` | Send notifications (email, Slack, Discord, Telegram, desktop) |
+
+## Tool Testing
+
+PHPClaw includes a built-in smoke test runner that validates every registered tool in a safe sandbox environment. No files outside the sandbox are touched, no external services are called unless credentials are configured.
+
+```bash
+# Test all tools
+php spark agent:tools:test
+
+# Test a specific tool
+php spark agent:tools:test git_ops
+
+# Verbose output with test details
+php spark agent:tools:test --verbose
+```
+
+Each tool is tested for:
+- **Schema validation** — tool defines a valid input schema
+- **Enabled check** — tool reports itself as enabled
+- **Argument validation** — tool correctly errors on missing required args
+- **Functional test** — tool performs a safe, non-destructive operation in a sandboxed temp directory
+
+Tests that require external services (API keys, running servers) are automatically skipped if the service isn't available.
+
+```
+  ╭─ Tool Smoke Tests ──────────────────────────────────────╮
+  │                                                          │
+  │  PASS  file_read::schema          3 parameters defined   │
+  │  PASS  file_read::read_file       read sandbox file      │
+  │  PASS  git_ops::status            branch: main           │
+  │  SKIP  image_generate::api_check  requires external API  │
+  │  PASS  code_patch::patch_unique   patched successfully   │
+  │                                                          │
+  │  22 passed, 0 failed, 2 skipped out of 24 tests         │
+  ╰──────────────────────────────────────────────────────────╯
+```
 
 ## Chat Commands
 
@@ -204,8 +274,11 @@ php spark agent:cache:clear       # Clear all cache
 php spark agent:cache:prune       # Prune expired entries
 php spark agent:maintain          # Run all maintenance
 
-# Scaffolding
+# Tools
 php spark agent:tools             # List tools
+php spark agent:tools:test        # Run smoke tests on all tools
+php spark agent:tools:test <name> # Test a single tool
+php spark agent:tools:test --verbose # Verbose test output
 php spark agent:tool:scaffold     # Generate new tool from template
 php spark agent:provider:scaffold # Generate new provider from template
 
@@ -241,7 +314,7 @@ php spark agent:config:reset --file providers  # Reset a single config file
      │  │ LMStudio │  │  │  shell_exec      │
      │  │ ChatGPT  │  │  │  browser_fetch   │
      │  │ Claude   │  │  │  grep_search     │
-     │  │ OpenLLM  │  │  │  ...13 total     │
+     │  │ OpenLLM  │  │  │  ...25 total     │
      │  └──────────┘  │  └─────────────────┘
      └────────────────┘
 ```
@@ -365,7 +438,7 @@ See the `docs/` directory for detailed documentation:
 - [REST API](docs/api.md) — API server, endpoints, authentication, and examples
 - [Architecture](docs/architecture.md) — system design and component overview
 - [Providers](docs/providers.md) — provider configuration and custom adapters
-- [Tools](docs/tools.md) — tool system and custom tool development
+- [Tools](docs/tools.md) — tool system, all 25 built-in tools, testing, and custom tool development
 - [Modules](docs/modules.md) — role-based module configuration
 - [Routing](docs/routing.md) — model routing and fallback chains
 - [Memory](docs/memory.md) — memory system, compaction, and summaries

@@ -9,7 +9,10 @@ use App\Libraries\Tools\{
     DirListTool, MkdirTool, MoveFileTool, DeleteFileTool,
     GrepSearchTool, HttpGetTool, BrowserFetchTool, BrowserTextTool,
     ShellExecTool, SystemInfoTool,
-    MemoryWriteTool, MemoryReadTool
+    MemoryWriteTool, MemoryReadTool,
+    GitOpsTool, CodePatchTool, DbQueryTool, ImageGenerateTool,
+    CronScheduleTool, DiffReviewTool, HttpRequestTool,
+    ArchiveExtractTool, ProcessManagerTool, NotificationSendTool
 };
 
 /**
@@ -36,6 +39,16 @@ class ToolRegistry
         'system_info' => SystemInfoTool::class,
         'memory_write' => MemoryWriteTool::class,
         'memory_read' => MemoryReadTool::class,
+        'git_ops' => GitOpsTool::class,
+        'code_patch' => CodePatchTool::class,
+        'db_query' => DbQueryTool::class,
+        'image_generate' => ImageGenerateTool::class,
+        'cron_schedule' => CronScheduleTool::class,
+        'diff_review' => DiffReviewTool::class,
+        'http_request' => HttpRequestTool::class,
+        'archive_extract' => ArchiveExtractTool::class,
+        'process_manager' => ProcessManagerTool::class,
+        'notification_send' => NotificationSendTool::class,
     ];
 
     public function __construct(?ConfigLoader $config = null)

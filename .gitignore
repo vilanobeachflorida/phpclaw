@@ -16,6 +16,10 @@ agent/writable/agent/state/
 agent/writable/agent/locks/
 agent/writable/agent/queues/
 agent/writable/agent/logs/
+agent/writable/agent/schedules/
+agent/writable/agent/processes/
+agent/writable/agent/generated/
+agent/writable/agent/data/
 
 # ── Agent config: token + credentials (sensitive) ────────
 agent/writable/agent/config/api.json
