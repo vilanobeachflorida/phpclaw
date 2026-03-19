@@ -1034,8 +1034,8 @@ class AgentExecutor
             if ($success) {
                 $data = $result['data'] ?? $result;
                 $json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
-                if (strlen($json) > 8000) {
-                    $json = substr($json, 0, 8000) . "\n... (truncated, " . strlen($json) . " bytes total)";
+                if (strlen($json) > 16000) {
+                    $json = substr($json, 0, 16000) . "\n... (truncated, " . strlen($json) . " bytes total)";
                 }
                 $parts[] = "<tool_result name=\"{$toolName}\" status=\"success\">\n{$json}\n</tool_result>";
             } else {
