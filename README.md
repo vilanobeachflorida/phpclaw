@@ -1,6 +1,6 @@
 # PHPClaw
 
-Terminal-first, multi-model AI agent shell built in PHP. Run it on your machine, connect any LLM provider, and work from your terminal.
+Self-hosted AI agent that you can run anywhere and access from anything. Use it from the terminal, or talk to it over HTTP from any app, script, or device on your network. Mix and match any combination of local and cloud LLM providers — run Ollama on your own hardware, fall back to Claude or GPT when you need more power, or use both at the same time with role-based routing.
 
 ```
   ╔══════════════════════════════════════════════╗
@@ -19,7 +19,7 @@ Terminal-first, multi-model AI agent shell built in PHP. Run it on your machine,
   ─ 4.2k in · 890 out · 3 tools · 5.1s ─
 ```
 
-PHPClaw is like Claude Code, but open-source, self-hosted, and works with any LLM. Connect Ollama, LM Studio, OpenAI, Claude, or any OpenAI-compatible endpoint. It has tools for file operations, shell commands, web browsing, and more. The agent loops autonomously -- calling tools, reading results, and continuing until the task is done.
+PHPClaw is an open-source, self-hosted AI agent shell built in PHP. Deploy it on a home server, a VPS, or any machine — then interact with it from a terminal, a browser, a mobile app, or anything that can make HTTP requests. Connect Ollama, LM Studio, OpenAI, Claude, or any OpenAI-compatible endpoint as providers. Route different tasks to different models: local models for quick lookups, cloud models for heavy reasoning, or any combination in between. The agent loops autonomously — calling tools, reading results, and continuing until the task is done. No vendor lock-in, no subscriptions required, your data stays on your machine.
 
 ## Quick Start
 
@@ -212,6 +212,8 @@ php spark agent:provider:scaffold # Generate new provider from template
 # Configuration
 php spark agent:config            # List config files
 php spark agent:config <name>     # Show config with syntax highlighting
+php spark agent:config:reset      # Reset all config to shipped defaults
+php spark agent:config:reset --file providers  # Reset a single config file
 ```
 
 ## Architecture

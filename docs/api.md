@@ -588,3 +588,6 @@ echo $result['response'] . "\n";
 | `php spark agent:api:serve --port 9000` | Use a custom port |
 | `php spark agent:api:serve --disable` | Disable the API server |
 | `php spark agent:api:serve --enable` | Re-enable the API server |
+| `php spark agent:config:reset` | Reset all config files to shipped defaults |
+| `php spark agent:config:reset --file api` | Reset only the API config to defaults |
+| `php spark agent:config:reset --yes` | Reset without confirmation prompt |
