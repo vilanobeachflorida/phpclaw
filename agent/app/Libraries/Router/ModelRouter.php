@@ -103,6 +103,11 @@ class ModelRouter
             $provider = $this->getProvider($providerName);
             if (!$provider) continue;
 
+            // Pass progress callback if set
+            if (isset($options['progress_callback']) && method_exists($provider, 'setProgressCallback')) {
+                $provider->setProgressCallback($options['progress_callback']);
+            }
+
             $maxRetries = $route['retry'];
             for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
                 try {

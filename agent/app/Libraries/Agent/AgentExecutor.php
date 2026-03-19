@@ -171,7 +171,17 @@ class AgentExecutor
                 $this->ui->thinking($thinkingMsg);
             }
 
-            $response = $this->router->chat($role, $messages);
+            // Pass a progress callback that updates the thinking line with elapsed time
+            $ui = $this->ui;
+            $response = $this->router->chat($role, $messages, [
+                'progress_callback' => function (float $elapsed, int $bytes) use ($ui, $thinkingMsg) {
+                    $timeStr = $elapsed < 60
+                        ? round($elapsed) . 's'
+                        : floor($elapsed / 60) . 'm ' . (int)($elapsed % 60) . 's';
+                    $ui->clearLine();
+                    $ui->inline("  " . $ui->style('◆', 'bright_magenta') . " {$thinkingMsg}" . $ui->style("... {$timeStr}", 'gray'));
+                },
+            ]);
 
             // Clear thinking indicator
             $this->ui->thinkingDone();
@@ -1072,8 +1082,14 @@ class AgentExecutor
      */
     private function summarizeArgs(array $args): string
     {
-        // Prefer path/file/command as the summary
-        foreach (['path', 'file', 'command', 'action', 'url', 'goal'] as $key) {
+        // For path-like args, use basename to keep it short and meaningful
+        foreach (['path', 'file'] as $key) {
+            if (isset($args[$key]) && is_string($args[$key]) && $args[$key] !== '') {
+                return basename($args[$key]);
+            }
+        }
+        // For other args, use the value directly
+        foreach (['command', 'action', 'url', 'goal'] as $key) {
             if (isset($args[$key]) && is_string($args[$key])) {
                 $val = $args[$key];
                 if (mb_strlen($val) > 60) $val = mb_substr($val, 0, 57) . '...';

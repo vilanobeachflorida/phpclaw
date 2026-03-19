@@ -146,6 +146,18 @@ abstract class BaseProvider implements ProviderInterface
     /**
      * Make an HTTP request using cURL.
      */
+    /** Optional progress callback: called periodically during HTTP requests. */
+    private $progressCallback = null;
+
+    /**
+     * Set a callback that's invoked periodically during long HTTP requests.
+     * Signature: function(float $elapsedSeconds, int $bytesReceived): void
+     */
+    public function setProgressCallback(?callable $callback): void
+    {
+        $this->progressCallback = $callback;
+    }
+
     protected function httpRequest(string $method, string $url, array $headers = [], $body = null, int $timeout = 30): array
     {
         $ch = curl_init();
@@ -157,6 +169,25 @@ abstract class BaseProvider implements ProviderInterface
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_CUSTOMREQUEST => strtoupper($method),
         ]);
+
+        // Enable progress reporting during long LLM calls
+        if ($this->progressCallback) {
+            $startTime = microtime(true);
+            $callback = $this->progressCallback;
+            $lastUpdate = 0;
+            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+            curl_setopt($ch, CURLOPT_PROGRESSFUNCTION,
+                function ($ch, $dlTotal, $dlNow, $ulTotal, $ulNow) use ($startTime, $callback, &$lastUpdate) {
+                    $elapsed = microtime(true) - $startTime;
+                    // Update every 3 seconds to avoid excessive output
+                    if ($elapsed - $lastUpdate >= 3.0) {
+                        $lastUpdate = $elapsed;
+                        $callback($elapsed, (int)$dlNow);
+                    }
+                    return 0; // 0 = continue, non-zero = abort
+                }
+            );
+        }
 
         if ($body !== null) {
             $payload = is_string($body) ? $body : json_encode($body);
