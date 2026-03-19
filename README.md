@@ -208,10 +208,13 @@ Tests that require external services (API keys, running servers) are automatical
   │  PASS  file_read::schema          3 parameters defined   │
   │  PASS  file_read::read_file       read sandbox file      │
   │  PASS  git_ops::status            branch: main           │
+  │  PASS  test_runner::detect        1 framework(s) detected│
+  │  PASS  error_parser::parse_php    1 error(s) parsed      │
   │  SKIP  image_generate::api_check  requires external API  │
-  │  PASS  code_patch::patch_unique   patched successfully   │
+  │  ...                                                     │
   │                                                          │
-  │  128 passed, 0 failed, 1 skipped out of 130 tests        │
+  │  128 passed, 0 failed, 1 skipped out of 130 test cases   │
+  │  (34 tools, ~3-4 tests each)                             │
   ╰──────────────────────────────────────────────────────────╯
 ```
 
@@ -234,19 +237,21 @@ While in `agent:chat`, use slash commands:
 | `/status` | Show system status |
 | `/debug` | Toggle debug mode (shows per-request tokens) |
 
-## Smart Module Auto-Detection
+## Smart Module Routing
 
-PHPClaw automatically detects what type of task you're asking for and routes to the best module — no manual switching needed.
+PHPClaw uses the LLM itself to classify your request and route it to the best module — no manual switching needed. Before your main request is processed, a fast, lightweight classification call asks the model: "Is this a question, a coding task, a web fetch, a planning request, or a summarization?" The answer determines which module handles it.
 
 | You say... | Auto-routes to |
 |-----------|---------------|
 | "create a PHP website for my business" | **coding** — full dev toolkit (19 tools) |
 | "fetch https://example.com" | **browser** — web fetching tools |
-| "how should I approach this migration?" | **planner** — task decomposition |
+| "plan out the deployment process" | **planner** — task decomposition |
 | "summarize this README" | **summarizer** — content compression |
 | "what is dependency injection?" | **reasoning** — stays on default |
+| "how do I make a bash script?" | **reasoning** — questions stay on default |
+| "build a REST API with Express" | **coding** — imperative = action |
 
-The agent stays on your manually-set module if you use `/module`. Auto-detection only activates on the default `reasoning` module.
+The LLM understands intent, not just keywords — "how do I build an API?" stays on reasoning (it's a question), while "build me an API" switches to coding (it's a command). If the LLM classification call fails, a regex fallback handles common patterns. Auto-routing only activates on the default `reasoning` module; manual `/module` selection is always respected.
 
 ### Available Modules
 
@@ -330,6 +335,10 @@ php spark agent:tools:test --verbose # Verbose test output
 php spark agent:tool:scaffold     # Generate new tool from template
 php spark agent:provider:scaffold # Generate new provider from template
 
+# Workspace
+php spark agent:workspace:clean        # Clean workspace output
+php spark agent:workspace:clean --all  # Clean all user-generated data
+
 # Configuration
 php spark agent:config            # List config files
 php spark agent:config <name>     # Show config with syntax highlighting
@@ -384,15 +393,34 @@ All runtime data is in `writable/agent/`:
 ```
 writable/agent/
 ├── config/          # providers.json, roles.json, modules.json, tools.json
+├── workspace/       # ★ Agent output — projects, websites, generated code
 ├── sessions/        # Conversation history and transcripts
 ├── tasks/           # Background task queue and progress
+├── plans/           # Task planner persistent plans
+├── context_stash/   # Stashed working contexts
 ├── memory/          # Global notes, summaries, compacted knowledge
 ├── cache/           # LLM response and tool caches
+├── generated/       # Generated images and media
 ├── logs/            # Service and error logs
 ├── prompts/         # System and module prompt templates
 ├── state/           # Service state, heartbeat, health
+├── processes/       # Background process state
+├── schedules/       # Cron schedules
 ├── queues/          # Task queues
 └── locks/           # File locks
+```
+
+The **workspace/** directory is where the agent puts all project output (websites, apps, scripts). It's git-ignored and can be cleaned with:
+
+```bash
+# Clean just the workspace
+php spark agent:workspace:clean
+
+# Clean everything (workspace + sessions + memory + plans + cache)
+php spark agent:workspace:clean --all
+
+# Factory reset: config + all data
+php spark agent:config:reset --yes
 ```
 
 No database required. Everything is JSON files and NDJSON logs.

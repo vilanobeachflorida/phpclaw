@@ -4,7 +4,7 @@
 
 Modules are role-based configurations that combine a system prompt, a set of tools, caching and memory policies, and optional provider/model overrides. They define how the agent behaves for different types of tasks.
 
-PHPClaw includes **automatic module detection** — when on the default `reasoning` module, the agent analyzes your request and automatically switches to the best module. For example, asking "create a website" auto-switches to the `coding` module, while "fetch this URL" switches to `browser`. You can also manually set a module with `/module <name>`.
+PHPClaw includes **LLM-powered module routing** — when on the default `reasoning` module, the agent uses a fast classification call to the LLM to determine which module best fits your request. For example, "create a website" routes to `coding`, while "fetch this URL" routes to `browser`, and "how does TCP work?" stays on `reasoning`. The LLM understands intent semantically, not just keywords. A regex fallback handles routing if the LLM call fails. You can also manually set a module with `/module <name>`.
 
 ## Built-in Modules
 
@@ -94,15 +94,17 @@ Internal module for system health monitoring. Used by the background service.
 
 When the user is on the default `reasoning` module, PHPClaw automatically analyzes each message and routes it to the best module. This happens transparently — the user doesn't need to manually switch modules for common tasks.
 
-Detection order (more specific modules are checked first):
+### How It Works
 
-1. **browser** — URLs, fetching, scraping
-2. **coding** — file creation, code changes, development
-3. **planner** — planning, breaking down tasks
-4. **summarizer** — summarization requests
-5. **reasoning** — everything else (default)
+1. **LLM classification (primary)** — A lightweight call using the `fast_response` role sends your message with a classification prompt. The model returns a single word: `reasoning`, `coding`, `browser`, `planner`, or `summarizer`. This understands nuance — "how do I make a bash script?" stays on reasoning, while "make me a bash script" routes to coding.
 
-If the user manually sets a module with `/module coding`, auto-detection is disabled and all requests go to that module until changed.
+2. **Regex fallback** — If the LLM call fails (provider down, timeout), a simple regex-based classifier handles common patterns like URLs → browser, "create a website" → coding, etc.
+
+3. **No routing** — If both methods return `reasoning`, nothing changes — the request stays on the default module.
+
+The classification call uses minimal tokens (~200 in, ~5 out) and adds negligible latency. The cost is tracked in the session usage.
+
+If the user manually sets a module with `/module coding`, auto-routing is disabled and all requests go to that module until changed.
 
 ### Examples
 
@@ -110,9 +112,10 @@ If the user manually sets a module with `/module coding`, auto-detection is disa
 |-----------|---------------------|
 | "create a PHP website for my business" | coding |
 | "fetch https://example.com and summarize it" | browser |
-| "how should I approach migrating our database?" | planner |
+| "plan out the database migration" | planner |
 | "summarize the README" | summarizer |
-| "what is the difference between TCP and UDP?" | reasoning (default) |
+| "what is the difference between TCP and UDP?" | reasoning (question) |
+| "how do I make a bash script?" | reasoning (question) |
 | "build a REST API with Express" | coding |
 | "break down the deployment process into steps" | planner |
 | "what's on https://news.ycombinator.com?" | browser |

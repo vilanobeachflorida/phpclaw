@@ -20,9 +20,7 @@
             "provider_override": null,
             "model_override": null,
             "tools": [
-                "file_read",
-                "grep_search",
-                "dir_list"
+                "*"
             ],
             "cache_policy": "standard",
             "memory_policy": "full",

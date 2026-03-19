@@ -493,6 +493,25 @@ class TerminalUI
     }
 
     /**
+     * Show a live-updating status line with running token counts and elapsed time.
+     * Call repeatedly to update in-place (overwrites the current line).
+     * Call liveStatusDone() to finalize.
+     */
+    public function liveStatus(string $summary): void
+    {
+        $this->clearLine();
+        $this->inline($this->style("  ─ {$summary} ─", 'gray'));
+    }
+
+    /**
+     * Finalize a live status line (move to next line).
+     */
+    public function liveStatusDone(): void
+    {
+        $this->clearLine();
+    }
+
+    /**
      * Display a full session usage panel (for /usage command).
      */
     public function usagePanel(array $session, array $perModel = []): void

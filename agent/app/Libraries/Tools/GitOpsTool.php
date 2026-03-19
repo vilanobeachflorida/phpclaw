@@ -84,8 +84,8 @@ class GitOpsTool extends BaseTool
             return ['exit' => -1, 'stdout' => '', 'stderr' => 'Failed to start process'];
         }
         fclose($pipes[0]);
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        $stdout = stream_get_contents($pipes[1], 10_485_760);
+        $stderr = stream_get_contents($pipes[2], 10_485_760);
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exit = proc_close($process);

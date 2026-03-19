@@ -53,6 +53,20 @@ class AgentExecutor
     /** Track completed actions for progress awareness. */
     private array $completedActions = [];
 
+    /** Module tool whitelist — null means allow all, array restricts. */
+    private ?array $allowedTools = null;
+
+    /** Max conversation history messages before trimming old tool results. */
+    private int $maxHistoryMessages = 40;
+
+    /** Start time for the current turn (for live elapsed display). */
+    private float $turnStartTime = 0;
+
+    /** Running token counts for live display. */
+    private int $liveInputTokens = 0;
+    private int $liveOutputTokens = 0;
+    private int $liveToolCalls = 0;
+
     public function __construct(
         ModelRouter $router,
         ToolRegistry $tools,
@@ -91,17 +105,29 @@ class AgentExecutor
     /**
      * Execute an agent turn: send to LLM, run tools, loop until done.
      *
+     * @param string     $role                LLM role for model routing
+     * @param array      &$conversationHistory  Conversation messages (modified in place)
+     * @param string     $systemPrompt         System prompt text
+     * @param array|null $allowedTools         Tool whitelist (null = all, array = restricted)
+     *
      * Returns an array with:
      *   'text'  => final display text
      *   'usage' => turn usage metrics (or null if no tracker)
      */
-    public function execute(string $role, array &$conversationHistory, string $systemPrompt): array
+    public function execute(string $role, array &$conversationHistory, string $systemPrompt, ?array $allowedTools = null): array
     {
         $this->usage?->startTurn();
+        $this->allowedTools = $allowedTools;
 
         // Capture original request for continuation context
         $this->originalRequest = $this->extractOriginalRequest($conversationHistory);
         $this->completedActions = [];
+
+        // Initialize live status counters
+        $this->turnStartTime = microtime(true);
+        $this->liveInputTokens = 0;
+        $this->liveOutputTokens = 0;
+        $this->liveToolCalls = 0;
 
         $iteration = 0;
         $totalToolCalls = 0;
@@ -151,7 +177,15 @@ class AgentExecutor
             // Track usage from this LLM call
             $this->usage?->recordLLMCall($response);
 
+            // Update live token counters
+            $callUsage = $response['usage'] ?? $response['metadata']['usage'] ?? null;
+            if ($callUsage) {
+                $this->liveInputTokens += $callUsage['input_tokens'] ?? $callUsage['prompt_tokens'] ?? $callUsage['prompt_eval_count'] ?? 0;
+                $this->liveOutputTokens += $callUsage['output_tokens'] ?? $callUsage['completion_tokens'] ?? $callUsage['eval_count'] ?? 0;
+            }
+
             if (!($response['success'] ?? false)) {
+                $this->ui->liveStatusDone();
                 $error = $response['error'] ?? 'Unknown error';
                 $this->ui->error("Provider error: {$error}");
                 return $this->buildResult("Error: {$error}", $allToolsUsed);
@@ -160,11 +194,10 @@ class AgentExecutor
             $rawContent = $response['content'] ?? '';
 
             if ($this->debug) {
-                $usage = $response['usage'] ?? $response['metadata']['usage'] ?? null;
                 $tokenInfo = '';
-                if ($usage) {
-                    $in = $usage['input_tokens'] ?? $usage['prompt_tokens'] ?? '?';
-                    $out = $usage['output_tokens'] ?? $usage['completion_tokens'] ?? '?';
+                if ($callUsage) {
+                    $in = $callUsage['input_tokens'] ?? $callUsage['prompt_tokens'] ?? '?';
+                    $out = $callUsage['output_tokens'] ?? $callUsage['completion_tokens'] ?? '?';
                     $tokenInfo = " | Tokens: {$in} in, {$out} out";
                 }
                 $this->ui->dim("[Agent] Response: " . strlen($rawContent) . " chars{$tokenInfo}");
@@ -173,9 +206,25 @@ class AgentExecutor
             // Parse the response
             $parsed = $this->parser->parse($rawContent);
 
-            // Only show display text if it's a final response (no tool calls)
+            // Show thinking snippets when the model is working (has tool calls)
+            // This gives the user visibility into the agent's thought process
+            if ($parsed['has_tool_calls'] && $parsed['display']) {
+                $snippet = $this->extractThinkingSnippet($parsed['display']);
+                if ($snippet) {
+                    $this->ui->dim("  " . $snippet);
+                }
+            }
+
+            // Only accumulate display text if it's a final response (no tool calls)
+            // If this is a repeated "done" response (nudge/review cycle), replace
+            // the previous summary instead of accumulating duplicates.
             if ($parsed['display'] && !$parsed['has_tool_calls']) {
-                $allDisplayText[] = $parsed['display'];
+                if ($nudgeCount > 0 && !empty($allDisplayText)) {
+                    // Replace the last entry — this is a revised completion, not additive
+                    $allDisplayText[count($allDisplayText) - 1] = $parsed['display'];
+                } else {
+                    $allDisplayText[] = $parsed['display'];
+                }
             }
 
             // If no tool calls, check if the model is really done or just narrating
@@ -253,7 +302,11 @@ class AgentExecutor
             // Execute tool calls (inject session_id for memory tools)
             $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
             $totalToolCalls += count($toolResults);
+            $this->liveToolCalls += count($toolResults);
             $this->usage?->recordToolCalls(count($toolResults));
+
+            // Show live status after tool execution
+            $this->showLiveStatus();
             foreach ($toolResults as $r) {
                 $allToolsUsed[] = ['tool' => $r['tool']];
                 if ($r['result']['success'] ?? false) {
@@ -288,6 +341,42 @@ class AgentExecutor
             $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
             $resultMessage = $this->formatToolResults($toolResults, $totalToolCalls);
             $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
+
+            // Trim conversation history if it's getting too long to prevent context explosion.
+            // Keep the first user message and the most recent messages, summarize the middle.
+            $this->trimHistory($conversationHistory);
+        }
+    }
+
+    /**
+     * Trim conversation history to prevent context explosion.
+     *
+     * When history exceeds maxHistoryMessages, keep the first user message
+     * (original request) and the most recent messages, collapse the middle
+     * into a short summary.
+     */
+    private function trimHistory(array &$history): void
+    {
+        if (count($history) <= $this->maxHistoryMessages) return;
+
+        // Keep the first message (original user request) and last N messages
+        $keepRecent = 20;
+        $first = $history[0];
+        $recent = array_slice($history, -$keepRecent);
+
+        // Count what we're trimming
+        $trimmed = count($history) - $keepRecent - 1;
+
+        // Rebuild with a summary in the middle
+        $history = [$first];
+        $history[] = [
+            'role' => 'user',
+            'content' => "[System: {$trimmed} earlier messages trimmed to save context. " .
+                         "Progress so far: {$this->liveToolCalls} tool calls completed. " .
+                         "Continue working on the original request.]"
+        ];
+        foreach ($recent as $msg) {
+            $history[] = $msg;
         }
     }
 
@@ -306,7 +395,12 @@ class AgentExecutor
         if ($nudgeCount >= $this->maxNudges) return false;
 
         // If no tool calls were made at all and the response mentions future actions, nudge
+        // BUT: if the response is substantial (>500 chars), it's probably a real answer
+        // to a question, not a mid-task narration. Don't nudge real answers.
         if ($totalToolCalls === 0 && $this->mentionsFutureWork($rawContent)) {
+            if (mb_strlen(trim($displayText)) > 500) {
+                return false; // Substantial response — this is a real answer, not narration
+            }
             return true;
         }
 
@@ -579,6 +673,96 @@ class AgentExecutor
     }
 
     /**
+     * Show a persistent status line with running token/time stats.
+     * Printed as a dim line that stays on screen (not an in-place overwrite).
+     */
+    private function showLiveStatus(): void
+    {
+        $elapsed = microtime(true) - $this->turnStartTime;
+        $parts = [];
+
+        if ($this->liveInputTokens > 0 || $this->liveOutputTokens > 0) {
+            $parts[] = $this->formatTokenCount($this->liveInputTokens) . ' in';
+            $parts[] = $this->formatTokenCount($this->liveOutputTokens) . ' out';
+        }
+
+        if ($this->liveToolCalls > 0) {
+            $n = $this->liveToolCalls;
+            $parts[] = "{$n} tool" . ($n !== 1 ? 's' : '');
+        }
+
+        if ($elapsed >= 1.0) {
+            $parts[] = $this->formatElapsed($elapsed);
+        }
+
+        if (!empty($parts)) {
+            $this->ui->dim("  ─ " . implode(' · ', $parts) . " ─");
+        }
+    }
+
+    private function formatTokenCount(int $tokens): string
+    {
+        if ($tokens >= 1_000_000) return round($tokens / 1_000_000, 1) . 'M';
+        if ($tokens >= 1_000) return round($tokens / 1_000, 1) . 'k';
+        return (string)$tokens;
+    }
+
+    private function formatElapsed(float $seconds): string
+    {
+        if ($seconds < 60) return round($seconds, 1) . 's';
+        $m = (int)($seconds / 60);
+        $s = (int)($seconds % 60);
+        return "{$m}m {$s}s";
+    }
+
+    /**
+     * Extract a short thinking snippet from the model's display text.
+     *
+     * When the model makes tool calls, it often includes brief reasoning text
+     * like "Creating the main index.html with SEO optimization..." or
+     * "I'll set up the directory structure first". We extract the first
+     * meaningful line and truncate it to show as a dimmed status line,
+     * similar to how Claude Code shows thought snippets.
+     */
+    private function extractThinkingSnippet(string $text): ?string
+    {
+        $text = trim($text);
+        if (empty($text)) return null;
+
+        // Split into lines and find the first substantive one
+        $lines = explode("\n", $text);
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Skip markdown headers
+            if (str_starts_with($line, '#')) continue;
+
+            // Skip bullet points that are just lists
+            if (preg_match('/^[-*]\s+`/', $line)) continue;
+
+            // Skip lines that are just filenames or paths
+            if (preg_match('#^[/~.][\w/.-]+$#', $line)) continue;
+
+            // Clean up common prefixes
+            $line = preg_replace('/^(okay,?\s*|alright,?\s*|sure,?\s*|great,?\s*)/i', '', $line);
+            $line = trim($line);
+
+            if (empty($line)) continue;
+
+            // Truncate to a reasonable length
+            if (mb_strlen($line) > 120) {
+                $line = mb_substr($line, 0, 117) . '...';
+            }
+
+            return $line;
+        }
+
+        return null;
+    }
+
+    /**
      * Build the return value, ending the current turn in the usage tracker.
      */
     private function buildResult(string $text, array $toolsUsed = []): array
@@ -629,6 +813,7 @@ class AgentExecutor
 
     /**
      * Execute a list of tool calls and return results.
+     * Enforces the module tool whitelist — rejects tools not in the allowed list.
      */
     private function executeToolCalls(array $toolCalls, array $providerResponse): array
     {
@@ -637,6 +822,14 @@ class AgentExecutor
         foreach ($toolCalls as $call) {
             $toolName = $call['name'];
             $toolArgs = $call['args'] ?? [];
+
+            // Enforce module tool whitelist
+            if ($this->allowedTools !== null && !in_array($toolName, $this->allowedTools, true)) {
+                $result = ['success' => false, 'error' => "Tool '{$toolName}' is not available in the current module"];
+                $this->ui->toolCall($toolName, false, 'not available in this module');
+                $results[] = ['tool' => $toolName, 'args' => $toolArgs, 'result' => $result];
+                continue;
+            }
 
             // Inject session context for memory tools
             if ($this->sessionId && in_array($toolName, ['memory_write', 'memory_read'])) {

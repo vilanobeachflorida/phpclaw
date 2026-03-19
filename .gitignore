@@ -20,6 +20,15 @@ agent/writable/agent/schedules/
 agent/writable/agent/processes/
 agent/writable/agent/generated/
 agent/writable/agent/data/
+agent/writable/agent/workspace/
+agent/writable/agent/plans/
+agent/writable/agent/context_stash/
+
+# ── Agent execution targets config (may contain keys) ────
+agent/writable/agent/config/exec_targets.json
+
+# ── Agent output in public (if any leaked) ───────────────
+agent/public/writable/
 
 # ── Agent config: token + credentials (sensitive) ────────
 agent/writable/agent/config/api.json

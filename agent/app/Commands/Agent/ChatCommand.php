@@ -118,12 +118,18 @@ class ChatCommand extends BaseCommand
             // Auto-detect task type and switch module/role if on default reasoning
             $effectiveModule = $this->currentModule;
             $effectiveRole = $this->currentRole;
-            $autoDetected = $this->autoDetectModule($input);
-            if ($autoDetected && $this->currentModule === 'reasoning') {
-                $effectiveModule = $autoDetected['module'];
-                $effectiveRole = $autoDetected['role'];
-                if ($this->debugMode) {
-                    $this->ui->dim("[Auto] Switched to {$effectiveModule} module for this request");
+            $didRoute = false;
+            if ($this->currentModule === 'reasoning') {
+                $this->ui->newLine();
+                $this->ui->thinking('Routing');
+                $autoDetected = $this->classifyRequest($input);
+                $this->ui->thinkingDone();
+
+                if ($autoDetected) {
+                    $effectiveModule = $autoDetected['module'];
+                    $effectiveRole = $autoDetected['role'];
+                    $this->ui->dim("  ▸ {$effectiveModule}");
+                    $didRoute = true;
                 }
             }
 
@@ -132,10 +138,15 @@ class ChatCommand extends BaseCommand
                 'session_id' => $sessionId,
             ]);
 
+            // Get the module's allowed tools for execution enforcement
+            $allowedTools = $this->getModuleAllowedTools($effectiveModule);
+
             // Execute agent loop — returns {text, usage}
             // The executor shows its own thinking/working indicators
-            $this->ui->newLine();
-            $result = $this->agent->execute($effectiveRole, $conversationHistory, $systemPrompt);
+            if (!$didRoute) {
+                $this->ui->newLine();
+            }
+            $result = $this->agent->execute($effectiveRole, $conversationHistory, $systemPrompt, $allowedTools);
             $responseText = $result['text'] ?? '';
             $turnUsage = $result['usage'] ?? null;
             $toolsUsed = $result['tools_used'] ?? [];
@@ -422,72 +433,161 @@ class ChatCommand extends BaseCommand
     }
 
     /**
-     * Auto-detect which module best fits the user's request.
-     *
-     * Returns ['module' => ..., 'role' => ...] or null if no strong match
-     * (stays on current module). Only triggers when on the default 'reasoning'
-     * module — if the user manually set a module, we respect that.
-     *
-     * Detection order matters: more specific modules are checked first.
+     * Get the list of allowed tools for a module from modules.json.
+     * Returns null if the module allows all tools (*), or an array of tool names.
      */
-    private function autoDetectModule(string $input): ?array
+    private function getModuleAllowedTools(string $module): ?array
     {
-        // Browser module — fetching/scraping web content
+        $modulesConfig = $this->config->get('modules', 'modules', []);
+        $tools = $modulesConfig[$module]['tools'] ?? null;
+
+        if (!$tools || in_array('*', $tools, true)) {
+            return null; // All tools allowed
+        }
+
+        return $tools;
+    }
+
+    /** Module name → role mapping */
+    private const MODULE_ROLES = [
+        'reasoning'  => 'reasoning',
+        'coding'     => 'coding',
+        'browser'    => 'browser',
+        'planner'    => 'planning',
+        'summarizer' => 'summarization',
+    ];
+
+    /**
+     * Classify a user request by asking the LLM which module fits best.
+     *
+     * Uses a lightweight classification call with the fast_response role
+     * (smallest/fastest model). Falls back to regex if the LLM call fails.
+     *
+     * Returns ['module' => ..., 'role' => ..., 'method' => 'llm'|'regex'] or null.
+     */
+    private function classifyRequest(string $input): ?array
+    {
+        // Try LLM classification first
+        $result = $this->llmClassify($input);
+        if ($result) return $result;
+
+        // Fallback to regex
+        $result = $this->regexClassify($input);
+        if ($result) {
+            $result['method'] = 'regex';
+            return $result;
+        }
+
+        return null;
+    }
+
+    /**
+     * Use the LLM to classify the request into a module.
+     * Quick, cheap call — just asks for a single word.
+     */
+    private function llmClassify(string $input): ?array
+    {
+        $classifyPrompt = <<<'PROMPT'
+Classify this user message into exactly ONE category. Reply with ONLY the category name, nothing else.
+
+Categories:
+- reasoning: Questions, explanations, analysis, general knowledge ("how does X work?", "what is X?", "explain X")
+- coding: Creating, modifying, or working with code/files ("create a website", "fix this bug", "write a script", "refactor the auth module", "run the tests")
+- browser: Fetching or reading web content ("fetch this URL", "what's on this page", "scrape this site")
+- planner: Planning, strategy, breaking down tasks ("plan the migration", "outline the steps", "create a roadmap")
+- summarizer: Summarizing or condensing content ("summarize this", "TLDR", "give me the key points")
+
+Important: If the user is ASKING about how to do something (a question), classify as "reasoning". If they are TELLING you to do it (a command), classify based on the action.
+
+User message:
+PROMPT;
+
+        $messages = [
+            ['role' => 'system', 'content' => 'You are a request classifier. Reply with exactly one word: reasoning, coding, browser, planner, or summarizer.'],
+            ['role' => 'user', 'content' => $classifyPrompt . $input],
+        ];
+
+        try {
+            $response = $this->router->chat('fast_response', $messages);
+
+            if (!($response['success'] ?? false)) return null;
+
+            $raw = strtolower(trim($response['content'] ?? ''));
+
+            // Extract the module name — model might add punctuation or explanation
+            foreach (array_keys(self::MODULE_ROLES) as $module) {
+                if (str_contains($raw, $module)) {
+                    // Track the classification tokens in usage
+                    $this->usageTracker->recordLLMCall($response);
+
+                    // Don't switch if it classified as reasoning (that's the default)
+                    if ($module === 'reasoning') return null;
+
+                    return [
+                        'module' => $module,
+                        'role'   => self::MODULE_ROLES[$module],
+                        'method' => 'llm',
+                    ];
+                }
+            }
+        } catch (\Throwable $e) {
+            if ($this->debugMode) {
+                $this->ui->dim("[Auto] LLM classify failed: {$e->getMessage()}, falling back to regex");
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Regex-based fallback classifier. Used when LLM classification
+     * fails or times out. Less nuanced but zero-cost.
+     */
+    private function regexClassify(string $input): ?array
+    {
+        // Questions stay on reasoning
         if ($this->matchesPatterns($input, [
-            '/\b(fetch|scrape|get|open|load|visit|browse|crawl)\b.+\b(url|page|site|website|link|webpage)\b/i',
-            '/\b(url|page|site|website|link|webpage)\b.+\b(fetch|scrape|get|open|load|visit|browse|crawl)\b/i',
-            '/\bfetch\s+https?:\/\//i',
-            '/\bget\s+(the\s+)?(content|text|html)\s+(from|of|at)\b/i',
-            '/\bwhat\'?s?\s+(on|at)\s+https?:\/\//i',
-            '/\bsummarize\s+(this\s+)?(url|page|site|link|article)\b/i',
-            '/\bdownload\s+(the\s+)?(page|content|html)\b/i',
-            '/\bhttp[s]?:\/\/\S+/i', // Contains a URL
+            '/^(how|what|why|when|where|who|which|can|could|would|should|is|are|do|does|did|will|has|have)\b/i',
+            '/\?$/',
+            '/\b(explain|describe|tell\s+me|what\s+is|what\s+are|how\s+does|how\s+do|how\s+can|how\s+to)\b/i',
+        ])) {
+            return null;
+        }
+
+        // Browser — URLs or fetch/scrape keywords
+        if ($this->matchesPatterns($input, [
+            '/\bhttps?:\/\/\S+/i',
+            '/\b(fetch|scrape|crawl)\b.+\b(url|page|site|website)\b/i',
         ])) {
             return ['module' => 'browser', 'role' => 'browser'];
         }
 
-        // Coding module — file creation, code changes, development tasks
+        // Coding — file/code creation commands
         if ($this->matchesPatterns($input, [
-            '/\b(create|build|make|write|code|generate|scaffold|implement)\b.+\b(website|site|app|application|page|file|script|project|api|server|component|module|function|class)\b/i',
-            '/\b(website|site|app|application|page|file|script|project|api|server)\b.+\b(create|build|make|write|code|generate|scaffold)\b/i',
-            '/\b(html|css|javascript|js|php|python|react|vue|angular|node|typescript|ts|rust|go|java|ruby|swift|dart|kotlin)\b.+\b(code|create|build|write|file|project|app)\b/i',
-            '/\b(refactor|debug|fix|patch|update|modify|edit|change)\b.+\b(code|file|function|class|method|bug|error|issue)\b/i',
-            '/\b(add|install|remove|update)\b.+\b(dependency|package|module|library|feature)\b/i',
-            '/\b(set\s+up|setup|init|initialize|bootstrap|start)\b.+\b(project|repo|repository|app|application|environment)\b/i',
-            '/\bin\s+(my|the|your)\s+(home|project|work)\s+(directory|folder|dir)\b/i',
-            '/\bcreate\s+(a\s+)?[\w\s]*\.(html|php|js|ts|py|css|json|yml|yaml|xml|md|txt|rb|go|rs|java|sh)\b/i',
-            '/\b(run|execute)\s+(the\s+)?(tests?|linter?|build|make)\b/i',
-            '/\b(commit|push|pull|merge|branch|checkout|stash|rebase|cherry-?pick)\b/i',
-            '/\b(deploy|docker|container|kubernetes|k8s)\b.+\b(build|create|run|start|push)\b/i',
-            '/\bwrite\s+(me\s+)?(a\s+)?(script|program|function|class|module|tool)\b/i',
+            '/\b(create|build|write|generate|scaffold|implement)\b.+\b(website|site|app|file|script|project|api|server|function|class)\b/i',
+            '/\b(refactor|debug|fix|patch|modify|edit)\b.+\b(code|file|function|class|method|bug)\b/i',
+            '/\b(commit|push|pull|merge|branch|deploy)\b/i',
+            '/\bwrite\s+(me\s+)?(a\s+)?(script|program|function|class)\b/i',
         ])) {
             return ['module' => 'coding', 'role' => 'coding'];
         }
 
-        // Planner module — planning, breaking down tasks, strategy
+        // Planner
         if ($this->matchesPatterns($input, [
-            '/\b(plan|outline|break\s+down|decompose|map\s+out|design|architect|roadmap)\b.+\b(task|project|feature|migration|refactor|implementation|approach|strategy)\b/i',
-            '/\b(how\s+should\s+(I|we))\b.+\b(approach|tackle|implement|build|design|structure|organize)\b/i',
-            '/\b(what\s+(are|would\s+be))\s+(the\s+)?steps\b/i',
-            '/\bplan\s+(for|to|how|out)\b/i',
-            '/\bstep[\s-]by[\s-]step\b.+\b(plan|guide|approach|instructions)\b/i',
+            '/\b(plan|outline|break\s+down|roadmap)\b.+\b(task|project|migration|implementation)\b/i',
             '/\bcreate\s+(a\s+)?(plan|roadmap|outline|checklist)\b/i',
-            '/\bbreak\s+(this|it)\s+(down|into|up)\b/i',
         ])) {
             return ['module' => 'planner', 'role' => 'planning'];
         }
 
-        // Summarizer module — summarization requests
+        // Summarizer
         if ($this->matchesPatterns($input, [
-            '/\b(summarize|summarise|tldr|tl;dr|sum\s+up|condense|digest)\b/i',
-            '/\bgive\s+me\s+(a\s+)?(summary|overview|brief|recap|rundown|gist)\b/i',
-            '/\bwhat\s+(are|were)\s+the\s+(key|main|important)\s+(points?|takeaways?|findings?)\b/i',
-            '/\b(shorten|compress|reduce)\s+(this|the|that)\b/i',
+            '/\b(summarize|summarise|tldr|tl;dr|condense)\b/i',
+            '/\bgive\s+me\s+(a\s+)?(summary|overview|brief|recap)\b/i',
         ])) {
             return ['module' => 'summarizer', 'role' => 'summarization'];
         }
 
-        // No strong match — stay on current module
         return null;
     }
 

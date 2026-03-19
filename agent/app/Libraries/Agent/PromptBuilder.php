@@ -50,8 +50,9 @@ class PromptBuilder
             $parts[] = $memoryContext;
         }
 
-        // Tool descriptions
-        $parts[] = $this->getToolInstructions();
+        // Tool descriptions — filtered by module
+        $allowedTools = $this->getModuleTools($module);
+        $parts[] = $this->getToolInstructions($allowedTools);
 
         // Environment info
         $parts[] = $this->getEnvironmentInfo();
@@ -60,6 +61,25 @@ class PromptBuilder
         $parts[] = $this->getResponseFormat();
 
         return implode("\n\n", array_filter($parts));
+    }
+
+    /**
+     * Get the list of allowed tools for a module from modules.json.
+     * Returns null if the module allows all tools (*), or an array of tool names.
+     */
+    private function getModuleTools(string $module): ?array
+    {
+        $configPath = $this->storage->path('config', 'modules.json');
+        if (!file_exists($configPath)) return null;
+
+        $config = json_decode(file_get_contents($configPath), true);
+        $tools = $config['modules'][$module]['tools'] ?? null;
+
+        if (!$tools || in_array('*', $tools, true)) {
+            return null; // All tools allowed
+        }
+
+        return $tools;
     }
 
     private function getCoreIdentity(): string
@@ -82,9 +102,23 @@ PROMPT;
         return null;
     }
 
-    private function getToolInstructions(): string
+    /**
+     * Build tool instructions for the system prompt.
+     *
+     * @param array|null $allowedTools List of tool names to include, or null for all.
+     */
+    private function getToolInstructions(?array $allowedTools = null): string
     {
         $toolList = $this->tools->listAll();
+        if (empty($toolList)) {
+            return '';
+        }
+
+        // Filter by module's allowed tools
+        if ($allowedTools !== null) {
+            $toolList = array_filter($toolList, fn($t) => in_array($t['name'], $allowedTools, true));
+        }
+
         if (empty($toolList)) {
             return '';
         }
@@ -96,8 +130,11 @@ PROMPT;
         $lines[] = "```\n";
         $lines[] = "You can make multiple tool calls in a single response. After each tool call, you will receive the result and can continue.\n";
 
-        // Memory instructions
-        $lines[] = "**Important: Use memory_write to save anything you might need to remember later** — user preferences, project details, important facts, corrections, etc. Use memory_read to recall saved information.\n";
+        // Memory instructions (only if memory tools are available)
+        $hasMemory = $allowedTools === null || in_array('memory_write', $allowedTools, true);
+        if ($hasMemory) {
+            $lines[] = "**Important: Use memory_write to save anything you might need to remember later** — user preferences, project details, important facts, corrections, etc. Use memory_read to recall saved information.\n";
+        }
 
         $lines[] = "### Tools:\n";
 
@@ -121,19 +158,27 @@ PROMPT;
             $lines[] = '';
         }
 
-        // Tool usage examples
+        // Tool usage examples — only show examples for available tools
         $lines[] = "### Examples:\n";
-        $lines[] = 'Read a file:';
-        $lines[] = '<tool_call>{"name": "file_read", "args": {"path": "/etc/hostname"}}</tool_call>';
-        $lines[] = '';
-        $lines[] = 'Run a command:';
-        $lines[] = '<tool_call>{"name": "shell_exec", "args": {"command": "date"}}</tool_call>';
-        $lines[] = '';
-        $lines[] = 'Save to memory:';
-        $lines[] = '<tool_call>{"name": "memory_write", "args": {"content": "User prefers Python for scripting", "type": "permanent", "tags": "preference"}}</tool_call>';
-        $lines[] = '';
-        $lines[] = 'Recall memory:';
-        $lines[] = '<tool_call>{"name": "memory_read", "args": {"type": "search", "query": "preference"}}</tool_call>';
+
+        $toolNames = array_column($toolList, 'name');
+        $examples = [
+            'file_read'    => ['Read a file:', '<tool_call>{"name": "file_read", "args": {"path": "/etc/hostname"}}</tool_call>'],
+            'shell_exec'   => ['Run a command:', '<tool_call>{"name": "shell_exec", "args": {"command": "date"}}</tool_call>'],
+            'file_write'   => ['Create a file:', '<tool_call>{"name": "file_write", "args": {"path": "hello.txt", "content": "Hello world"}}</tool_call>'],
+            'grep_search'  => ['Search files:', '<tool_call>{"name": "grep_search", "args": {"pattern": "TODO", "path": "."}}</tool_call>'],
+            'memory_write' => ['Save to memory:', '<tool_call>{"name": "memory_write", "args": {"content": "User prefers Python", "type": "permanent", "tags": "preference"}}</tool_call>'],
+        ];
+
+        $shownExamples = 0;
+        foreach ($examples as $toolName => [$label, $example]) {
+            if (in_array($toolName, $toolNames, true) && $shownExamples < 3) {
+                $lines[] = $label;
+                $lines[] = $example;
+                $lines[] = '';
+                $shownExamples++;
+            }
+        }
 
         return implode("\n", $lines);
     }
@@ -144,6 +189,7 @@ PROMPT;
         $cwd = getcwd();
         $user = getenv('USER') ?: 'user';
         $os = PHP_OS;
+        $workspace = WRITEPATH . 'agent/workspace';
 
         return <<<PROMPT
 ## Environment
@@ -151,6 +197,9 @@ PROMPT;
 - User: {$user}
 - Home: {$home}
 - Working directory: {$cwd}
+- Workspace: {$workspace}
+
+**IMPORTANT: When creating files, projects, websites, or any output for the user, always put them in the workspace directory ({$workspace}) unless the user explicitly specifies a different path.** The workspace is a dedicated output folder that is git-ignored and can be safely cleaned. Create project subdirectories inside it, e.g. {$workspace}/my-project/.
 PROMPT;
     }
 

@@ -201,12 +201,13 @@ class ExecTargetTool extends BaseTool
 
     private function execLocal(string $command, ?string $cwd = null): array
     {
+        $maxBytes = 10_485_760; // 10MB cap to prevent OOM
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $process = proc_open($command, $descriptors, $pipes, $cwd ?? getcwd());
         if (!is_resource($process)) return $this->error('Failed to start local process');
         fclose($pipes[0]);
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        $stdout = stream_get_contents($pipes[1], $maxBytes);
+        $stderr = stream_get_contents($pipes[2], $maxBytes);
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exitCode = proc_close($process);

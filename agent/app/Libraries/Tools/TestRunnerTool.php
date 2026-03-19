@@ -184,8 +184,8 @@ class TestRunnerTool extends BaseTool
         if (!is_resource($process)) return $this->error("Failed to start test runner: {$command}");
 
         fclose($pipes[0]);
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        $stdout = stream_get_contents($pipes[1], 10_485_760);
+        $stderr = stream_get_contents($pipes[2], 10_485_760);
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exitCode = proc_close($process);

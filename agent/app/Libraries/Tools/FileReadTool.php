@@ -24,6 +24,9 @@ class FileReadTool extends BaseTool
         if (!file_exists($path)) {
             return $this->error("File not found: {$path}");
         }
+        if (is_dir($path)) {
+            return $this->error("Path is a directory, not a file: {$path}. Use dir_list instead.");
+        }
         if (!is_readable($path)) {
             return $this->error("File not readable: {$path}");
         }

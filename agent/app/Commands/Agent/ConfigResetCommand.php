@@ -234,7 +234,7 @@ class ConfigResetCommand extends BaseCommand
                         'role'              => 'reasoning',
                         'provider_override' => null,
                         'model_override'    => null,
-                        'tools'             => ['file_read', 'grep_search', 'dir_list'],
+                        'tools'             => ['*'],
                         'cache_policy'      => 'standard',
                         'memory_policy'     => 'full',
                         'timeout'           => 120,
@@ -449,8 +449,65 @@ class ConfigResetCommand extends BaseCommand
         CLI::newLine();
         CLI::write('Config reset to defaults.', 'green');
 
+        // Offer to also clean user-generated content
         if (!$fileOnly) {
+            CLI::newLine();
+            $cleanData = $autoYes ? 'y' : CLI::prompt('Also clean all user-generated data (workspace, sessions, memory, plans)?', ['y', 'n']);
+
+            if (strtolower($cleanData) === 'y') {
+                $basePath = WRITEPATH . 'agent/';
+                $dirs = ['workspace', 'plans', 'context_stash', 'generated', 'sessions', 'memory', 'cache', 'processes', 'schedules', 'tasks', 'locks', 'queues'];
+                $totalRemoved = 0;
+
+                foreach ($dirs as $dir) {
+                    $fullPath = $basePath . $dir;
+                    if (is_dir($fullPath)) {
+                        $removed = $this->cleanDirectory($fullPath);
+                        $totalRemoved += $removed;
+                        if ($removed > 0) {
+                            CLI::write("  ✓ {$dir}/ — {$removed} items removed", 'green');
+                        }
+                    }
+                }
+
+                // Also clean exec_targets.json
+                $execTargets = $basePath . 'config/exec_targets.json';
+                if (file_exists($execTargets)) {
+                    unlink($execTargets);
+                    CLI::write("  ✓ exec_targets.json removed", 'green');
+                }
+
+                CLI::newLine();
+                CLI::write("Cleaned {$totalRemoved} items of user-generated data.", 'green');
+            }
+
+            CLI::newLine();
             CLI::write('Run "php spark agent:setup" to reconfigure your providers.', 'light_gray');
         }
+    }
+
+    /**
+     * Remove all contents of a directory but keep the directory itself.
+     */
+    private function cleanDirectory(string $path): int
+    {
+        if (!is_dir($path)) return 0;
+
+        $count = 0;
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+                $count++;
+            }
+        }
+
+        return $count;
     }
 }

@@ -143,11 +143,9 @@ class ResponseParser
         // Remove tool result blocks that sometimes leak
         $text = preg_replace('/<tool_result.*?<\/tool_result>/is', '', $text);
 
-        // If there are tool calls, strip internal reasoning patterns
-        // These are things the model says to itself while working
-        if ($hasToolCalls) {
-            $text = $this->stripInternalReasoning($text);
-        }
+        // NOTE: We no longer strip internal reasoning when tool calls are present.
+        // The AgentExecutor now extracts thinking snippets from the display text
+        // to show the user what the model is thinking, similar to Claude Code.
 
         // Clean up whitespace
         $text = preg_replace('/\n{3,}/', "\n\n", $text);
