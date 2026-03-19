@@ -103,9 +103,18 @@ class ModelRouter
             $provider = $this->getProvider($providerName);
             if (!$provider) continue;
 
-            // Pass progress callback if set
+            // Set up streaming: pass progress callback and enable streaming
+            // if the provider supports it and a callback is provided
+            $capabilities = $provider->getCapabilities();
             if (isset($options['progress_callback']) && method_exists($provider, 'setProgressCallback')) {
-                $provider->setProgressCallback($options['progress_callback']);
+                if ($capabilities['streaming'] ?? false) {
+                    $provider->setProgressCallback($options['progress_callback']);
+                    $options['stream'] = true;
+                } else {
+                    // Provider doesn't support streaming — no progress updates
+                    $provider->setProgressCallback(null);
+                    $options['stream'] = false;
+                }
             }
 
             $maxRetries = $route['retry'];

@@ -147,7 +147,7 @@ abstract class BaseProvider implements ProviderInterface
      * Make an HTTP request using cURL.
      */
     /** Optional progress callback: called periodically during HTTP requests. */
-    private $progressCallback = null;
+    protected $progressCallback = null;
 
     /**
      * Set a callback that's invoked periodically during long HTTP requests.
