@@ -167,8 +167,8 @@ class ConfigResetCommand extends BaseCommand
                         'provider'    => 'lmstudio',
                         'model'       => 'default',
                         'fallback'    => [],
-                        'timeout'     => 180,
-                        'retry'       => 2,
+                        'timeout'     => 600,
+                        'retry'       => 1,
                     ],
                     'summarization' => [
                         'description' => 'Fast summarization tasks',
