@@ -43,12 +43,13 @@ class AgentExecutor
         bool $debug = false,
         ?SessionManager $sessions = null,
         ?string $sessionId = null,
-        ?UsageTracker $usage = null
+        ?UsageTracker $usage = null,
+        ?TerminalUI $ui = null
     ) {
         $this->router = $router;
         $this->tools = $tools;
         $this->parser = new ResponseParser();
-        $this->ui = new TerminalUI();
+        $this->ui = $ui ?? new TerminalUI();
         $this->debug = $debug;
         $this->sessions = $sessions;
         $this->sessionId = $sessionId;

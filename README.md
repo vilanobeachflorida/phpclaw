@@ -175,6 +175,10 @@ php spark agent:models            # List available models
 php spark agent:roles             # List model roles
 php spark agent:modules           # List modules
 
+# API
+php spark agent:api:token          # Generate or show the API token
+php spark agent:api:serve          # Start the API HTTP server
+
 # Authentication
 php spark agent:auth status       # Show auth status
 php spark agent:auth login <p>    # OAuth/setup-token login
@@ -215,7 +219,7 @@ php spark agent:config <name>     # Show config with syntax highlighting
 ```
 ┌─────────────────────────────────────────────────┐
 │                   User Input                     │
-│              (Terminal / CLI REPL)                │
+│        (Terminal / CLI REPL / REST API)           │
 └──────────────────────┬──────────────────────────┘
                        │
               ┌────────▼────────┐
@@ -270,6 +274,48 @@ writable/agent/
 
 No database required. Everything is JSON files and NDJSON logs.
 
+## REST API
+
+PHPClaw includes a built-in REST API for interacting with the agent over HTTP. Chat with the agent, maintain sessions, and query system status from any language or tool.
+
+```bash
+# Generate a token
+php spark agent:api:token
+
+# Start the API server (default: 0.0.0.0:8081)
+php spark agent:api:serve
+
+# Open interactive docs in your browser
+#   http://localhost:8081/api/docs
+```
+
+Send messages and maintain sessions via simple JSON requests:
+
+```bash
+# Start a conversation
+curl -X POST http://localhost:8081/api/chat \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello! What can you do?"}'
+
+# Continue with the returned session_id
+curl -X POST http://localhost:8081/api/chat \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "List files in /tmp", "session_id": "SESSION_ID"}'
+```
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Send a message, get agent response |
+| `/api/sessions` | GET | List all sessions |
+| `/api/sessions/:id` | GET | Get session details and messages |
+| `/api/sessions/:id/archive` | POST | Archive a session |
+| `/api/status` | GET | Health check and system info |
+| `/api/docs` | GET | Interactive API documentation (no auth) |
+
+The API server can be enabled/disabled in `writable/agent/config/api.json`. See the full **[API Documentation](docs/api.md)** for configuration, all endpoints, session flow, CORS, and code examples in cURL, Python, JavaScript, and PHP.
+
 ## Running as a Service
 
 PHPClaw can run as a background service with a heartbeat loop:
@@ -314,6 +360,7 @@ Edit prompt templates in `writable/agent/prompts/`:
 
 See the `docs/` directory for detailed documentation:
 
+- [REST API](docs/api.md) — API server, endpoints, authentication, and examples
 - [Architecture](docs/architecture.md) — system design and component overview
 - [Providers](docs/providers.md) — provider configuration and custom adapters
 - [Tools](docs/tools.md) — tool system and custom tool development

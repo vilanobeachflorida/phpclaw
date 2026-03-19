@@ -1,17 +1,70 @@
 {
-  "tools": {
-    "file_read": { "enabled": true, "description": "Read file contents", "timeout": 10 },
-    "file_write": { "enabled": true, "description": "Write content to file", "timeout": 10 },
-    "file_append": { "enabled": true, "description": "Append content to file", "timeout": 10 },
-    "dir_list": { "enabled": true, "description": "List directory contents", "timeout": 10 },
-    "mkdir": { "enabled": true, "description": "Create directory", "timeout": 10 },
-    "move_file": { "enabled": true, "description": "Move or rename file", "timeout": 10 },
-    "delete_file": { "enabled": true, "description": "Delete a file", "timeout": 10 },
-    "grep_search": { "enabled": true, "description": "Search file contents with patterns", "timeout": 30 },
-    "http_get": { "enabled": true, "description": "Make HTTP GET request", "timeout": 30 },
-    "browser_fetch": { "enabled": true, "description": "Fetch web page content", "timeout": 30 },
-    "browser_text": { "enabled": true, "description": "Extract text from web page", "timeout": 30 },
-    "shell_exec": { "enabled": true, "description": "Execute shell command", "timeout": 60, "allowed_commands": [] },
-    "system_info": { "enabled": true, "description": "Get system information", "timeout": 10 }
-  }
+    "tools": {
+        "file_read": {
+            "enabled": true,
+            "description": "Read file contents",
+            "timeout": 10
+        },
+        "file_write": {
+            "enabled": true,
+            "description": "Write content to file",
+            "timeout": 10
+        },
+        "file_append": {
+            "enabled": true,
+            "description": "Append content to file",
+            "timeout": 10
+        },
+        "dir_list": {
+            "enabled": true,
+            "description": "List directory contents",
+            "timeout": 10
+        },
+        "mkdir": {
+            "enabled": true,
+            "description": "Create directory",
+            "timeout": 10
+        },
+        "move_file": {
+            "enabled": true,
+            "description": "Move or rename file",
+            "timeout": 10
+        },
+        "delete_file": {
+            "enabled": true,
+            "description": "Delete a file",
+            "timeout": 10
+        },
+        "grep_search": {
+            "enabled": true,
+            "description": "Search file contents with patterns",
+            "timeout": 30
+        },
+        "http_get": {
+            "enabled": true,
+            "description": "Make HTTP GET request",
+            "timeout": 30
+        },
+        "browser_fetch": {
+            "enabled": true,
+            "description": "Fetch web page content",
+            "timeout": 30
+        },
+        "browser_text": {
+            "enabled": true,
+            "description": "Extract text from web page",
+            "timeout": 30
+        },
+        "shell_exec": {
+            "enabled": true,
+            "description": "Execute shell command",
+            "timeout": 60,
+            "allowed_commands": []
+        },
+        "system_info": {
+            "enabled": true,
+            "description": "Get system information",
+            "timeout": 10
+        }
+    }
 }

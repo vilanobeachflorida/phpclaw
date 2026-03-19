@@ -1,68 +1,70 @@
 {
-  "roles": {
-    "heartbeat": {
-      "description": "Lightweight health check role",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 10,
-      "retry": 1
-    },
-    "reasoning": {
-      "description": "Deep reasoning and analysis",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": ["openllm"],
-      "timeout": 120,
-      "retry": 2
-    },
-    "coding": {
-      "description": "Code generation and analysis",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 180,
-      "retry": 2
-    },
-    "summarization": {
-      "description": "Fast summarization tasks",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 60,
-      "retry": 1
-    },
-    "planning": {
-      "description": "Task planning and decomposition",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 120,
-      "retry": 2
-    },
-    "browser": {
-      "description": "Web content processing",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 60,
-      "retry": 1
-    },
-    "memory_compaction": {
-      "description": "Memory compaction and summarization",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 120,
-      "retry": 1
-    },
-    "fast_response": {
-      "description": "Quick responses for simple queries",
-      "provider": "lmstudio",
-      "model": "default",
-      "fallback": [],
-      "timeout": 30,
-      "retry": 1
+    "roles": {
+        "heartbeat": {
+            "description": "Lightweight health check role",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 10,
+            "retry": 1
+        },
+        "reasoning": {
+            "description": "Deep reasoning and analysis",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [
+                "openllm"
+            ],
+            "timeout": 120,
+            "retry": 2
+        },
+        "coding": {
+            "description": "Code generation and analysis",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 180,
+            "retry": 2
+        },
+        "summarization": {
+            "description": "Fast summarization tasks",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 60,
+            "retry": 1
+        },
+        "planning": {
+            "description": "Task planning and decomposition",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 120,
+            "retry": 2
+        },
+        "browser": {
+            "description": "Web content processing",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 60,
+            "retry": 1
+        },
+        "memory_compaction": {
+            "description": "Memory compaction and summarization",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 120,
+            "retry": 1
+        },
+        "fast_response": {
+            "description": "Quick responses for simple queries",
+            "provider": "lmstudio",
+            "model": "default",
+            "fallback": [],
+            "timeout": 30,
+            "retry": 1
+        }
     }
-  }
 }

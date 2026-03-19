@@ -1,1 +1,34 @@
+# ── Runtime logs ──────────────────────────────────────────
 agent/writable/logs/
+
+# ── CI4 framework runtime ────────────────────────────────
+agent/writable/cache/
+agent/writable/debugbar/
+agent/writable/session/
+agent/writable/uploads/
+
+# ── Agent runtime data (generated at runtime) ────────────
+agent/writable/agent/sessions/
+agent/writable/agent/memory/
+agent/writable/agent/cache/
+agent/writable/agent/tasks/
+agent/writable/agent/state/
+agent/writable/agent/locks/
+agent/writable/agent/queues/
+agent/writable/agent/logs/
+
+# ── Agent config: token + credentials (sensitive) ────────
+agent/writable/agent/config/api.json
+agent/writable/agent/config/oauth/
+
+# ── Environment files ────────────────────────────────────
+agent/.env
+
+# ── OS / IDE junk ────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -1,108 +1,136 @@
 {
-  "modules": {
-    "heartbeat": {
-      "enabled": true,
-      "description": "System health monitoring",
-      "role": "heartbeat",
-      "provider_override": null,
-      "model_override": null,
-      "tools": [],
-      "cache_policy": "none",
-      "memory_policy": "none",
-      "timeout": 10,
-      "retry": 1,
-      "prompt_file": "modules/heartbeat.md"
-    },
-    "reasoning": {
-      "enabled": true,
-      "description": "Deep reasoning and analysis",
-      "role": "reasoning",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["file_read", "grep_search", "dir_list"],
-      "cache_policy": "standard",
-      "memory_policy": "full",
-      "timeout": 120,
-      "retry": 2,
-      "prompt_file": "modules/reasoning.md"
-    },
-    "coding": {
-      "enabled": true,
-      "description": "Code generation and modification",
-      "role": "coding",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["file_read", "file_write", "file_append", "dir_list", "mkdir", "grep_search", "shell_exec"],
-      "cache_policy": "none",
-      "memory_policy": "full",
-      "timeout": 180,
-      "retry": 2,
-      "prompt_file": "modules/coding.md"
-    },
-    "summarizer": {
-      "enabled": true,
-      "description": "Content summarization",
-      "role": "summarization",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["file_read"],
-      "cache_policy": "aggressive",
-      "memory_policy": "summary_only",
-      "timeout": 60,
-      "retry": 1,
-      "prompt_file": "modules/summarizer.md"
-    },
-    "memory": {
-      "enabled": true,
-      "description": "Memory management and compaction",
-      "role": "memory_compaction",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["file_read", "file_write", "dir_list"],
-      "cache_policy": "none",
-      "memory_policy": "none",
-      "timeout": 120,
-      "retry": 1,
-      "prompt_file": "modules/memory.md"
-    },
-    "planner": {
-      "enabled": true,
-      "description": "Task planning and decomposition",
-      "role": "planning",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["file_read", "dir_list", "grep_search"],
-      "cache_policy": "standard",
-      "memory_policy": "full",
-      "timeout": 120,
-      "retry": 2,
-      "prompt_file": "modules/planner.md"
-    },
-    "browser": {
-      "enabled": true,
-      "description": "Web content fetching and processing",
-      "role": "browser",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["browser_fetch", "browser_text", "http_get"],
-      "cache_policy": "standard",
-      "memory_policy": "summary_only",
-      "timeout": 60,
-      "retry": 1,
-      "prompt_file": "modules/browser.md"
-    },
-    "tool_router": {
-      "enabled": true,
-      "description": "Routes tool execution requests",
-      "role": "fast_response",
-      "provider_override": null,
-      "model_override": null,
-      "tools": ["*"],
-      "cache_policy": "none",
-      "memory_policy": "full",
-      "timeout": 30,
-      "retry": 1,
-      "prompt_file": "modules/tool_router.md"
+    "modules": {
+        "heartbeat": {
+            "enabled": true,
+            "description": "System health monitoring",
+            "role": "heartbeat",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [],
+            "cache_policy": "none",
+            "memory_policy": "none",
+            "timeout": 10,
+            "retry": 1,
+            "prompt_file": "modules/heartbeat.md"
+        },
+        "reasoning": {
+            "enabled": true,
+            "description": "Deep reasoning and analysis",
+            "role": "reasoning",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "file_read",
+                "grep_search",
+                "dir_list"
+            ],
+            "cache_policy": "standard",
+            "memory_policy": "full",
+            "timeout": 120,
+            "retry": 2,
+            "prompt_file": "modules/reasoning.md"
+        },
+        "coding": {
+            "enabled": true,
+            "description": "Code generation and modification",
+            "role": "coding",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "file_read",
+                "file_write",
+                "file_append",
+                "dir_list",
+                "mkdir",
+                "grep_search",
+                "shell_exec"
+            ],
+            "cache_policy": "none",
+            "memory_policy": "full",
+            "timeout": 180,
+            "retry": 2,
+            "prompt_file": "modules/coding.md"
+        },
+        "summarizer": {
+            "enabled": true,
+            "description": "Content summarization",
+            "role": "summarization",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "file_read"
+            ],
+            "cache_policy": "aggressive",
+            "memory_policy": "summary_only",
+            "timeout": 60,
+            "retry": 1,
+            "prompt_file": "modules/summarizer.md"
+        },
+        "memory": {
+            "enabled": true,
+            "description": "Memory management and compaction",
+            "role": "memory_compaction",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "file_read",
+                "file_write",
+                "dir_list"
+            ],
+            "cache_policy": "none",
+            "memory_policy": "none",
+            "timeout": 120,
+            "retry": 1,
+            "prompt_file": "modules/memory.md"
+        },
+        "planner": {
+            "enabled": true,
+            "description": "Task planning and decomposition",
+            "role": "planning",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "file_read",
+                "dir_list",
+                "grep_search"
+            ],
+            "cache_policy": "standard",
+            "memory_policy": "full",
+            "timeout": 120,
+            "retry": 2,
+            "prompt_file": "modules/planner.md"
+        },
+        "browser": {
+            "enabled": true,
+            "description": "Web content fetching and processing",
+            "role": "browser",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "browser_fetch",
+                "browser_text",
+                "http_get"
+            ],
+            "cache_policy": "standard",
+            "memory_policy": "summary_only",
+            "timeout": 60,
+            "retry": 1,
+            "prompt_file": "modules/browser.md"
+        },
+        "tool_router": {
+            "enabled": true,
+            "description": "Routes tool execution requests",
+            "role": "fast_response",
+            "provider_override": null,
+            "model_override": null,
+            "tools": [
+                "*"
+            ],
+            "cache_policy": "none",
+            "memory_policy": "full",
+            "timeout": 30,
+            "retry": 1,
+            "prompt_file": "modules/tool_router.md"
+        }
     }
-  }
 }
