@@ -114,11 +114,11 @@ class ToolsTestCommand extends BaseCommand
             $ui->style((string)$skipped, 'yellow'),
             $total
         );
-        $ui->line("  {$summary}");
+        $ui->writeln("  {$summary}");
         $ui->newLine();
 
         if ($failed > 0) {
-            $ui->line('  ' . $ui->style('Some tools failed their smoke tests. Check configuration and dependencies.', 'yellow'));
+            $ui->writeln('  ' . $ui->style('Some tools failed their smoke tests. Check configuration and dependencies.', 'yellow'));
             $ui->newLine();
         }
     }
@@ -522,6 +522,224 @@ class ToolsTestCommand extends BaseCommand
                 $tests['missing_channel'] = function ($tool) {
                     $result = $tool->execute([]);
                     return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing args'];
+                };
+                break;
+
+            case 'exec_target':
+                $tests['list_targets'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'list']);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['active']),
+                        'detail' => 'active target: ' . ($result['data']['active'] ?? 'unknown'),
+                    ];
+                };
+                $tests['status_local'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'status', 'target' => 'local']);
+                    return [
+                        'pass' => $result['success'] && ($result['data']['reachable'] ?? false),
+                        'detail' => 'local target reachable, OS: ' . ($result['data']['os'] ?? 'unknown'),
+                    ];
+                };
+                $tests['exec_local'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'exec', 'target' => 'local', 'command' => 'echo phpclaw_exec_test']);
+                    return [
+                        'pass' => $result['success'] && str_contains($result['data']['stdout'] ?? '', 'phpclaw_exec_test'),
+                        'detail' => 'executed command on local target',
+                    ];
+                };
+                $tests['register_remove'] = function ($tool) {
+                    $reg = $tool->execute(['action' => 'register', 'target' => 'test_target', 'type' => 'docker', 'container' => 'test_container']);
+                    if (!$reg['success']) return ['pass' => false, 'detail' => 'register failed'];
+                    $rm = $tool->execute(['action' => 'remove', 'target' => 'test_target']);
+                    return ['pass' => $rm['success'], 'detail' => 'register/remove lifecycle passed'];
+                };
+                break;
+
+            case 'project_detect':
+                $tests['detect_cwd'] = function ($tool) {
+                    $result = $tool->execute([]);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['languages']),
+                        'detail' => 'detected: ' . implode(', ', $result['data']['languages'] ?? []),
+                    ];
+                };
+                $tests['detect_sandbox'] = function ($tool) use ($sandbox) {
+                    // Create marker files
+                    file_put_contents("{$sandbox}/package.json", '{"name":"test","scripts":{"test":"jest"}}');
+                    file_put_contents("{$sandbox}/index.js", 'console.log("hi");');
+                    $result = $tool->execute(['path' => $sandbox]);
+                    return [
+                        'pass' => $result['success'] && in_array('JavaScript', $result['data']['languages'] ?? []),
+                        'detail' => 'detected JavaScript from package.json',
+                    ];
+                };
+                break;
+
+            case 'test_runner':
+                $tests['detect'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'detect']);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['frameworks']),
+                        'detail' => $result['data']['count'] . ' framework(s) detected',
+                    ];
+                };
+                $tests['missing_action'] = function ($tool) {
+                    $result = $tool->execute([]);
+                    return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing action'];
+                };
+                break;
+
+            case 'lint_check':
+                $tests['detect'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'detect']);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['linters']),
+                        'detail' => $result['data']['count'] . ' linter(s) detected',
+                    ];
+                };
+                $tests['missing_action'] = function ($tool) {
+                    $result = $tool->execute([]);
+                    return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing action'];
+                };
+                break;
+
+            case 'code_symbols':
+                $tests['outline'] = function ($tool) use ($sandbox) {
+                    file_put_contents("{$sandbox}/test_symbols.php", "<?php\nfunction hello() {}\nclass Foo {\n  public function bar() {}\n}\n");
+                    $result = $tool->execute(['action' => 'outline', 'path' => "{$sandbox}/test_symbols.php"]);
+                    return [
+                        'pass' => $result['success'] && ($result['data']['count'] ?? 0) >= 2,
+                        'detail' => ($result['data']['count'] ?? 0) . ' symbols found',
+                    ];
+                };
+                $tests['find_definition'] = function ($tool) use ($sandbox) {
+                    $result = $tool->execute(['action' => 'find_definition', 'symbol' => 'hello', 'path' => $sandbox]);
+                    return [
+                        'pass' => $result['success'],
+                        'detail' => count($result['data']['definitions'] ?? []) . ' definition(s) found',
+                    ];
+                };
+                $tests['missing_action'] = function ($tool) {
+                    $result = $tool->execute([]);
+                    return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing action'];
+                };
+                break;
+
+            case 'task_planner':
+                $tests['create_get_delete'] = function ($tool) {
+                    $create = $tool->execute([
+                        'action' => 'create',
+                        'goal' => 'Smoke test plan',
+                        'steps' => ['Step 1', 'Step 2', 'Step 3'],
+                    ]);
+                    if (!$create['success']) return ['pass' => false, 'detail' => 'create failed'];
+                    $id = $create['data']['id'];
+
+                    $get = $tool->execute(['action' => 'get', 'plan_id' => $id]);
+                    $stepCount = count($get['data']['steps'] ?? []);
+
+                    $update = $tool->execute(['action' => 'update_step', 'plan_id' => $id, 'step_index' => 0, 'status' => 'done']);
+
+                    $resume = $tool->execute(['action' => 'resume', 'plan_id' => $id]);
+
+                    $delete = $tool->execute(['action' => 'delete', 'plan_id' => $id]);
+
+                    return [
+                        'pass' => $get['success'] && $stepCount === 3 && $update['success'] && $resume['success'] && $delete['success'],
+                        'detail' => 'create/get/update/resume/delete lifecycle passed',
+                    ];
+                };
+                $tests['list'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'list']);
+                    return ['pass' => $result['success'] && isset($result['data']['plans']), 'detail' => $result['data']['count'] . ' plans'];
+                };
+                break;
+
+            case 'build_runner':
+                $tests['detect'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'detect']);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['tools']),
+                        'detail' => $result['data']['count'] . ' build tool(s) detected',
+                    ];
+                };
+                $tests['detect_sandbox'] = function ($tool) use ($sandbox) {
+                    file_put_contents("{$sandbox}/Makefile", "build:\n\techo build\ntest:\n\techo test\nclean:\n\techo clean\n");
+                    $result = $tool->execute(['action' => 'detect', 'path' => $sandbox]);
+                    $found = false;
+                    foreach (($result['data']['tools'] ?? []) as $t) {
+                        if ($t['name'] === 'make') $found = true;
+                    }
+                    return ['pass' => $result['success'] && $found, 'detail' => 'detected Makefile'];
+                };
+                $tests['missing_action'] = function ($tool) {
+                    $result = $tool->execute([]);
+                    return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing action'];
+                };
+                break;
+
+            case 'error_parser':
+                $tests['parse_php'] = function ($tool) {
+                    $input = 'PHP Fatal error: Call to undefined function foo() in /app/test.php on line 42';
+                    $result = $tool->execute(['action' => 'parse', 'input' => $input]);
+                    $errors = $result['data']['errors'] ?? [];
+                    $found = false;
+                    foreach ($errors as $e) {
+                        if (($e['line'] ?? 0) === 42 && str_contains($e['file'] ?? '', 'test.php')) $found = true;
+                    }
+                    return ['pass' => $result['success'] && $found, 'detail' => count($errors) . ' error(s) parsed'];
+                };
+                $tests['parse_python'] = function ($tool) {
+                    $input = "Traceback (most recent call last):\n  File \"/app/main.py\", line 10, in <module>\n    foo()\nNameError: name 'foo' is not defined";
+                    $result = $tool->execute(['action' => 'parse', 'input' => $input]);
+                    return [
+                        'pass' => $result['success'] && ($result['data']['language'] ?? '') === 'python',
+                        'detail' => 'detected Python, ' . ($result['data']['error_count'] ?? 0) . ' error(s)',
+                    ];
+                };
+                $tests['parse_node'] = function ($tool) {
+                    $input = "/app/index.js:15:3\n  throw new Error('test')\nError: test\n    at Object.<anonymous> (/app/index.js:15:3)";
+                    $result = $tool->execute(['action' => 'parse', 'input' => $input]);
+                    return [
+                        'pass' => $result['success'] && ($result['data']['language'] ?? '') === 'node',
+                        'detail' => 'detected Node.js, ' . ($result['data']['error_count'] ?? 0) . ' error(s)',
+                    ];
+                };
+                $tests['missing_input'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'parse']);
+                    return ['pass' => !$result['success'], 'detail' => 'correctly errors on missing input'];
+                };
+                break;
+
+            case 'context_manager':
+                $tests['summarize_file'] = function ($tool) use ($sandbox) {
+                    file_put_contents("{$sandbox}/test_ctx.php", "<?php\nuse App\\Foo;\nclass Bar {\n  public function baz() {}\n}\nfunction qux() {}\n");
+                    $result = $tool->execute(['action' => 'summarize', 'path' => "{$sandbox}/test_ctx.php"]);
+                    return [
+                        'pass' => $result['success'] && ($result['data']['lines'] ?? 0) > 0,
+                        'detail' => ($result['data']['lines'] ?? 0) . ' lines, ' . count($result['data']['classes'] ?? []) . ' class(es)',
+                    ];
+                };
+                $tests['stash_recall_delete'] = function ($tool) use ($sandbox) {
+                    $stash = $tool->execute(['action' => 'stash', 'stash_name' => 'smoke_test', 'context' => 'test context', 'task' => 'testing']);
+                    if (!$stash['success']) return ['pass' => false, 'detail' => 'stash failed: ' . ($stash['error'] ?? '')];
+
+                    $recall = $tool->execute(['action' => 'recall', 'stash_name' => 'smoke_test']);
+                    $contextMatch = ($recall['data']['context'] ?? '') === 'test context';
+
+                    $delete = $tool->execute(['action' => 'delete_stash', 'stash_name' => 'smoke_test']);
+
+                    return [
+                        'pass' => $recall['success'] && $contextMatch && $delete['success'],
+                        'detail' => 'stash/recall/delete lifecycle passed',
+                    ];
+                };
+                $tests['project_brief'] = function ($tool) {
+                    $result = $tool->execute(['action' => 'project_brief', 'max_depth' => 1]);
+                    return [
+                        'pass' => $result['success'] && isset($result['data']['tree']),
+                        'detail' => count($result['data']['languages'] ?? []) . ' language(s) detected',
+                    ];
                 };
                 break;
         }
