@@ -113,6 +113,7 @@ class ModelRouter
                 try {
                     $result = $provider->chat($messages, array_merge($options, [
                         'model' => $route['model'],
+                        'timeout' => $route['timeout'] ?? 120,
                     ]));
 
                     if ($result['success'] ?? false) {

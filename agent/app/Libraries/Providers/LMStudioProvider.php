@@ -68,12 +68,15 @@ class LMStudioProvider extends BaseProvider
             $payload = array_merge($payload, $options['model_options']);
         }
 
+        // Use the higher of provider timeout and role timeout
+        $timeout = max($this->config['timeout'], $options['timeout'] ?? 0);
+
         $result = $this->httpRequest(
             'POST',
             rtrim($this->config['base_url'], '/') . '/v1/chat/completions',
             ['Content-Type: application/json'],
             $payload,
-            $this->config['timeout']
+            $timeout
         );
 
         if (!$result['success']) {
