@@ -211,7 +211,7 @@ Tests that require external services (API keys, running servers) are automatical
   │  SKIP  image_generate::api_check  requires external API  │
   │  PASS  code_patch::patch_unique   patched successfully   │
   │                                                          │
-  │  22 passed, 0 failed, 2 skipped out of 24 tests         │
+  │  128 passed, 0 failed, 1 skipped out of 130 tests        │
   ╰──────────────────────────────────────────────────────────╯
 ```
 
@@ -233,6 +233,40 @@ While in `agent:chat`, use slash commands:
 | `/memory` | Show memory stats |
 | `/status` | Show system status |
 | `/debug` | Toggle debug mode (shows per-request tokens) |
+
+## Smart Module Auto-Detection
+
+PHPClaw automatically detects what type of task you're asking for and routes to the best module — no manual switching needed.
+
+| You say... | Auto-routes to |
+|-----------|---------------|
+| "create a PHP website for my business" | **coding** — full dev toolkit (19 tools) |
+| "fetch https://example.com" | **browser** — web fetching tools |
+| "how should I approach this migration?" | **planner** — task decomposition |
+| "summarize this README" | **summarizer** — content compression |
+| "what is dependency injection?" | **reasoning** — stays on default |
+
+The agent stays on your manually-set module if you use `/module`. Auto-detection only activates on the default `reasoning` module.
+
+### Available Modules
+
+| Module | Tools | Purpose |
+|--------|-------|---------|
+| **reasoning** | 3 | Deep analysis, Q&A (default) |
+| **coding** | 19 | Code generation, refactoring, testing, deployment |
+| **browser** | 4 | Web fetching, scraping, content extraction |
+| **planner** | 3 | Task decomposition and step-by-step planning |
+| **summarizer** | 1 | Content summarization |
+| **tool_router** | 34 | Catch-all with access to every tool |
+
+### Small Model Enhancements
+
+PHPClaw includes several features designed to get better results from smaller local models (7B–14B):
+
+- **Continuation nudging** — when a model narrates plans instead of executing them, the agent nudges it to make tool calls
+- **Hallucination detection** — catches when a model claims it created files that don't actually exist
+- **Tool-based self-review** — after task completion, verifies files were actually written using `dir_list`
+- **Progress tracking** — reminds the model of the original request and completed actions between iterations
 
 ## Token Usage Tracking
 

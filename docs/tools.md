@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tools are callable actions that the agent can invoke during chat and task execution. PHPClaw ships with 25 built-in tools and supports adding custom tools through scaffolding.
+Tools are callable actions that the agent can invoke during chat and task execution. PHPClaw ships with 34 built-in tools and supports adding custom tools through scaffolding.
 
 ## ToolInterface and BaseTool
 
@@ -58,6 +58,19 @@ abstract class BaseTool implements ToolInterface
 | `code_patch` | Surgical code editing via exact string replacement | `path`, `old_string`, `new_string`, `replace_all` |
 | `archive_extract` | Create and extract archives (ZIP, tar.gz, tar.bz2) | `action`, `archive_path`, `destination`, `files`, `format` |
 
+### Coding & Development
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `project_detect` | Auto-detect project languages, frameworks, test runners, linters, and build systems | `path` |
+| `test_runner` | Detect and run tests for any language, returning structured pass/fail results | `action`, `path`, `scope`, `target`, `framework` |
+| `lint_check` | Detect and run linters/formatters for any language with structured diagnostics | `action`, `path`, `linter`, `target` |
+| `code_symbols` | Language-agnostic code intelligence: find definitions, references, and outlines | `action`, `path`, `symbol`, `kind` |
+| `build_runner` | Detect and run build systems, install dependencies, and execute project scripts | `action`, `path`, `tool`, `script_name` |
+| `error_parser` | Parse raw error output from any language into structured errors | `action`, `input`, `language` |
+| `task_planner` | Create and track multi-step plans for complex tasks with persistent checkpoints | `action`, `plan_id`, `goal`, `steps` |
+| `context_manager` | Compress, stash, and recall working context for long coding sessions | `action`, `path`, `stash_name`, `context` |
+
 ### Search & Analysis
 
 | Tool | Description | Key Parameters |
@@ -65,6 +78,15 @@ abstract class BaseTool implements ToolInterface
 | `grep_search` | Search file contents with regex patterns | `pattern`, `path`, `recursive`, `max_results` |
 | `git_ops` | Structured git operations with parsed JSON output | `operation`, `path`, `ref`, `max_count` |
 | `diff_review` | Analyze code diffs with structured per-hunk output | `mode`, `path_a`, `path_b`, `context_lines` |
+
+### Execution Targets
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `exec_target` | Manage execution targets (local, SSH, Docker, K8s) and run commands remotely | `action`, `target`, `command`, `type`, `host` |
+| `shell_exec` | Execute shell commands | `command`, `cwd`, `timeout` |
+| `system_info` | Get system information | (none) |
+| `process_manager` | Start, monitor, and stop background processes | `action`, `command`, `name`, `pid`, `tail_lines` |
 
 ### Network & Web
 
@@ -74,14 +96,6 @@ abstract class BaseTool implements ToolInterface
 | `http_request` | Full HTTP client (all methods, headers, body, auth) | `url`, `method`, `headers`, `body`, `json`, `form` |
 | `browser_fetch` | Fetch and parse web pages | `url`, `timeout` |
 | `browser_text` | Extract text from web pages | `url`, `timeout` |
-
-### System & Process
-
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `shell_exec` | Execute shell commands | `command`, `cwd`, `timeout` |
-| `system_info` | Get system information | (none) |
-| `process_manager` | Start, monitor, and stop background processes | `action`, `command`, `name`, `pid`, `tail_lines` |
 
 ### Data & Integration
 
@@ -101,26 +115,216 @@ abstract class BaseTool implements ToolInterface
 
 ## Tool Details
 
+### project_detect
+
+Scans a directory for marker files and returns a structured profile of the project:
+
+- **Languages** — detected by file extensions and marker files (PHP, JavaScript, Python, Go, Rust, Java, Ruby, Swift, Dart, etc.)
+- **Frameworks** — CodeIgniter, Laravel, Next.js, Django, FastAPI, Rails, Flutter, etc.
+- **Package managers** — composer, npm, yarn, pnpm, cargo, go mod, pip, poetry, bundler, etc.
+- **Test frameworks** — PHPUnit, Jest, Vitest, pytest, cargo test, go test, RSpec, JUnit, etc.
+- **Linters** — PHPStan, ESLint, Prettier, Ruff, golangci-lint, Clippy, RuboCop, etc.
+- **Build systems** — Make, Docker, Vite, Webpack, CMake, etc.
+
+```
+{"path": "/home/user/my-project"}
+```
+
+### test_runner
+
+Universal test execution with structured output. Works with any language:
+
+- **detect** — find test framework(s) in the project
+- **run** — execute tests with scope control (all, file, method, suite)
+- **parse** — parse raw test output into structured results
+
+Parses JUnit XML output when available, falls back to regex parsing of stdout for PHPUnit, Jest, pytest, cargo test, go test, etc.
+
+```
+# Detect test framework
+{"action": "detect", "path": "/my-project"}
+
+# Run all tests
+{"action": "run"}
+
+# Run a specific test file
+{"action": "run", "scope": "file", "target": "tests/UserTest.php"}
+
+# Run a specific test method
+{"action": "run", "scope": "method", "target": "test_user_creation"}
+```
+
+### lint_check
+
+Universal linting and formatting with structured diagnostics:
+
+- **detect** — identify installed linters from config files
+- **run** — execute linter, return structured diagnostics (file, line, message, severity)
+- **fix** — auto-fix where supported
+
+Supports JSON output parsing for ESLint, PHPStan, Ruff, Biome, and others. Falls back to `file:line:col: message` regex parsing.
+
+```
+# Detect linters
+{"action": "detect"}
+
+# Run linter
+{"action": "run", "linter": "eslint"}
+
+# Auto-fix
+{"action": "fix", "linter": "prettier"}
+```
+
+### code_symbols
+
+Language-agnostic code intelligence via universal-ctags (with regex fallback):
+
+- **index** — build/update symbol index for the project
+- **find_definition** — locate where a symbol is defined
+- **find_references** — find all usages of a symbol (via grep)
+- **list_symbols** — list symbols in a file (functions, classes, types)
+- **outline** — structural overview of a file grouped by kind
+
+Uses `ctags` when installed, falls back to regex patterns that work for all major languages.
+
+```
+# Build index
+{"action": "index", "path": "/my-project"}
+
+# Find where a function is defined
+{"action": "find_definition", "symbol": "UserService", "kind": "class"}
+
+# Get file outline
+{"action": "outline", "path": "src/controllers/UserController.php"}
+```
+
+### build_runner
+
+Universal build system and dependency management:
+
+- **detect** — identify build tools and available scripts
+- **build** — execute the build command
+- **run** — start the project (dev server, main script)
+- **deps** — install or update dependencies
+- **clean** — run clean/reset commands
+- **script** — run a named script (npm run X, make X, composer X, etc.)
+
+Auto-detects: npm, yarn, pnpm, bun, composer, cargo, go, pip, bundler, make, task, just, docker, gradle, maven, flutter, mix, and more.
+
+```
+# Detect build tools
+{"action": "detect"}
+
+# Install dependencies
+{"action": "deps"}
+
+# Run a script
+{"action": "script", "script_name": "dev"}
+
+# Build the project
+{"action": "build"}
+```
+
+### error_parser
+
+Parses raw error output from any language into structured errors:
+
+- Auto-detects the language from error patterns
+- Extracts file, line, column, message, severity, and error type
+- Parses stack traces (PHP, Python, Node.js, Java, Ruby, Go)
+- Detects fatal errors, panics, and segfaults
+- Supports PHP, Python, Node.js, Go, Rust, Java/Kotlin, Ruby, C/C++
+
+```
+# Parse raw error output
+{"action": "parse", "input": "PHP Fatal error: Call to undefined function foo() in /app/test.php on line 42"}
+
+# Parse a log file
+{"action": "parse_file", "path": "/var/log/app.log", "tail": 100}
+```
+
+### task_planner
+
+Persistent multi-step task planning with checkpoints:
+
+- **create** — create a plan with a goal and steps
+- **update_step** — mark steps as pending/in_progress/done/failed/blocked/skipped
+- **checkpoint** — save progress (files changed, step status)
+- **resume** — reload plan state after context reset
+- **complete** / **delete** — lifecycle management
+
+Plans are stored as JSON in `writable/agent/plans/` and persist across sessions.
+
+```
+# Create a plan
+{"action": "create", "goal": "Migrate auth to JWT", "steps": ["Add JWT library", "Create token service", "Update middleware", "Write tests"]}
+
+# Update a step
+{"action": "update_step", "plan_id": "20260318_...", "step_index": 0, "status": "done"}
+
+# Save checkpoint
+{"action": "checkpoint", "plan_id": "20260318_...", "files_changed": ["src/auth/jwt.php"]}
+```
+
+### context_manager
+
+Context compression and stashing for long sessions:
+
+- **summarize** — compress a file or directory into key facts (imports, exports, classes, functions, file counts)
+- **stash** — save working context (task, files, notes) before switching tasks
+- **recall** — restore stashed context
+- **project_brief** — one-call summary of the entire project (stack, tree, git info, README excerpt)
+
+```
+# Summarize a file
+{"action": "summarize", "path": "src/services/UserService.php"}
+
+# Stash current context
+{"action": "stash", "stash_name": "auth-refactor", "task": "Refactoring auth middleware", "files": ["src/auth.php"]}
+
+# Get project overview
+{"action": "project_brief", "max_depth": 2}
+```
+
+### exec_target
+
+Execution environment manager for running commands on local, remote, or containerized hosts:
+
+- **list** — show configured targets
+- **set** — switch active target
+- **status** — probe connectivity, OS, available tools
+- **register** / **remove** — manage targets
+- **exec** — run a command on a target
+- **upload** / **download** — transfer files to/from targets
+
+Supported target types: `local`, `ssh`, `docker`, `docker_compose`, `kubernetes`
+
+```
+# Register an SSH target
+{"action": "register", "target": "staging", "type": "ssh", "host": "staging.example.com", "user": "deploy", "key": "~/.ssh/id_ed25519"}
+
+# Run a command on a Docker container
+{"action": "exec", "target": "app", "command": "php artisan migrate"}
+
+# Upload a file
+{"action": "upload", "local_path": "./deploy.sh", "remote_path": "/tmp/deploy.sh"}
+```
+
 ### git_ops
 
-Runs structured git operations without exposing raw shell access. Returns parsed JSON output instead of raw text.
+Runs structured git operations without exposing raw shell access. Returns parsed JSON output.
 
 **Supported operations:** `status`, `diff`, `log`, `blame`, `branch`, `show`, `stash_list`, `tag`
 
 ```
-# Get current status
 {"operation": "status"}
-
-# View recent commits
 {"operation": "log", "max_count": 10}
-
-# Diff against a ref
 {"operation": "diff", "ref": "HEAD~3"}
 ```
 
 ### code_patch
 
-Safer alternative to `file_write` for modifications. Finds an exact string in a file and replaces it, avoiding the need to reproduce the entire file.
+Safer alternative to `file_write` for modifications. Finds an exact string in a file and replaces it.
 
 - Requires the `old_string` to be unique in the file (unless `replace_all` is set)
 - Errors if the string is not found or if `old_string` equals `new_string`
@@ -141,14 +345,6 @@ Execute SQL queries against configured databases via PDO. Supports MySQL, Postgr
             "default": {
                 "driver": "sqlite",
                 "database": "writable/agent/data/agent.db"
-            },
-            "production": {
-                "driver": "mysql",
-                "host": "127.0.0.1",
-                "port": 3306,
-                "database": "myapp",
-                "username": "root",
-                "password": ""
             }
         }
     }
@@ -171,39 +367,17 @@ Images are saved to `writable/agent/generated/images/` by default.
 
 Manage scheduled tasks stored as JSON files. Supports simple intervals (`5m`, `1h`, `1d`) and cron expressions (`*/5 * * * *`).
 
-Tasks can be agent prompts (sent to the LLM) or shell commands.
-
 ### http_request
 
-Full HTTP client that goes beyond `http_get`:
-
-- All HTTP methods (POST, PUT, PATCH, DELETE, HEAD, OPTIONS)
-- Custom headers
-- JSON body (auto-sets Content-Type)
-- Form-encoded body
-- Raw string body
-- Response header parsing
-- JSON response auto-detection
-- Configurable host blocking
+Full HTTP client: all methods (POST, PUT, PATCH, DELETE, HEAD, OPTIONS), custom headers, JSON/form/raw body, response header parsing, host blocking.
 
 ### archive_extract
 
-Create and extract ZIP, tar.gz, and tar.bz2 archives:
-
-- Auto-detects format from file extension
-- Maximum extraction size limit (default 100MB) for safety
-- Recursively adds directories when creating archives
+Create and extract ZIP, tar.gz, and tar.bz2 archives. Auto-detects format. Maximum extraction size limit (default 100MB).
 
 ### process_manager
 
-Lifecycle management for background processes:
-
-- **start** — launches a command in the background, captures stdout/stderr to log files
-- **stop** — sends SIGTERM (graceful), then SIGKILL if needed
-- **status** — check if a PID is still running
-- **list** — show all managed processes and their state
-- **tail** — read recent stdout/stderr output
-- **kill_all** — SIGTERM all managed processes
+Background process lifecycle management: start, stop, status, list, tail output, kill_all.
 
 ### notification_send
 
@@ -217,18 +391,9 @@ Send notifications through five channels:
 | `telegram` | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` env vars |
 | `email` | SMTP config in `tools.json` |
 
-Desktop notifications work on macOS (osascript), Linux (notify-send), and Windows (PowerShell toast).
-
 ### diff_review
 
-Structured diff analysis with four modes:
-
-- **files** — compare two files on disk
-- **git** — compare two git refs
-- **staged** — show git staged changes
-- **working** — show unstaged working tree changes
-
-Returns parsed hunks with addition/deletion counts per hunk.
+Structured diff analysis with four modes: files (compare two files), git (compare refs), staged, working.
 
 ## Tool Configuration
 

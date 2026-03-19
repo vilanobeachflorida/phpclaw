@@ -19,6 +19,10 @@ use App\Libraries\UI\TerminalUI;
  * - The model can't make progress (consecutive failures)
  *
  * If stuck, the agent asks the user what to do rather than silently stopping.
+ *
+ * For smaller models that tend to narrate instead of act, the executor
+ * includes a continuation system that nudges the model back to making
+ * tool calls when it appears to have stopped mid-task.
  */
 class AgentExecutor
 {
@@ -36,6 +40,18 @@ class AgentExecutor
 
     /** All tools failing this many iterations in a row = stuck. */
     private int $maxConsecutiveFailures = 3;
+
+    /** Max times to nudge the model before accepting the response as final. */
+    private int $maxNudges = 3;
+
+    /** Max total iterations to prevent runaway loops. */
+    private int $maxIterations = 50;
+
+    /** Track the original user request for context. */
+    private string $originalRequest = '';
+
+    /** Track completed actions for progress awareness. */
+    private array $completedActions = [];
 
     public function __construct(
         ModelRouter $router,
@@ -83,6 +99,10 @@ class AgentExecutor
     {
         $this->usage?->startTurn();
 
+        // Capture original request for continuation context
+        $this->originalRequest = $this->extractOriginalRequest($conversationHistory);
+        $this->completedActions = [];
+
         $iteration = 0;
         $totalToolCalls = 0;
         $allToolsUsed = [];
@@ -90,13 +110,24 @@ class AgentExecutor
         $previousCallSignatures = [];
         $consecutiveFailures = 0;
         $repeatCount = 0;
+        $nudgeCount = 0;
+        $reviewDone = false;
 
         while (true) {
             $iteration++;
 
+            // Safety valve: prevent truly runaway loops
+            if ($iteration > $this->maxIterations) {
+                $this->ui->thinkingDone();
+                $this->ui->warn("Reached maximum iterations ({$this->maxIterations}). Stopping.");
+                $finalText = implode("\n\n", $allDisplayText);
+                if (empty($finalText)) $finalText = "(Reached iteration limit)";
+                $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
+                return $this->buildResult($finalText, $allToolsUsed);
+            }
+
             // Show thinking indicator while waiting for LLM
             if ($iteration > 1) {
-                // Clear previous thinking line and show fresh one
                 $this->ui->thinkingDone();
             }
             $this->ui->thinking($iteration === 1 ? 'Thinking' : 'Working');
@@ -109,7 +140,7 @@ class AgentExecutor
 
             if ($this->debug) {
                 $this->ui->thinkingDone();
-                $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} tool calls, " . count($messages) . " messages");
+                $this->ui->dim("[Agent] Iteration {$iteration}, {$totalToolCalls} tool calls, " . count($messages) . " messages, nudges: {$nudgeCount}");
             }
 
             $response = $this->router->chat($role, $messages);
@@ -143,23 +174,62 @@ class AgentExecutor
             $parsed = $this->parser->parse($rawContent);
 
             // Only show display text if it's a final response (no tool calls)
-            // When there ARE tool calls, the display text is usually internal
-            // reasoning that shouldn't be shown — the tool results matter.
             if ($parsed['display'] && !$parsed['has_tool_calls']) {
                 $allDisplayText[] = $parsed['display'];
             }
 
-            // If no tool calls, the model is done
+            // If no tool calls, check if the model is really done or just narrating
             if (!$parsed['has_tool_calls']) {
+                // Determine if this looks like a mid-task narration rather than a final answer
+                $shouldNudge = $this->shouldNudgeContinuation(
+                    $parsed['display'],
+                    $rawContent,
+                    $totalToolCalls,
+                    $nudgeCount
+                );
+
+                if ($shouldNudge) {
+                    $nudgeCount++;
+
+                    if ($this->debug) {
+                        $this->ui->dim("[Agent] Nudging model to continue (nudge #{$nudgeCount})");
+                    }
+
+                    // Add the model's response and a continuation nudge
+                    $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
+                    $conversationHistory[] = ['role' => 'user', 'content' => $this->buildContinuationNudge($nudgeCount)];
+                    continue;
+                }
+
+                // Model is actually done — do a self-review to verify work
+                // Trigger review when:
+                //   - More than 1 tool call was made (non-trivial task)
+                //   - We haven't already done a review (reviewCount tracks this)
+                if ($totalToolCalls > 1 && !$reviewDone) {
+                    $reviewDone = true;
+                    $reviewResult = $this->selfReview($role, $conversationHistory, $systemPrompt, $allDisplayText);
+                    if ($reviewResult !== null) {
+                        // Review found issues — continue the loop
+                        // Remove the last display text if it was a hallucinated summary
+                        if (!empty($allDisplayText) && $this->claimsMoreThanDone(end($allDisplayText))) {
+                            array_pop($allDisplayText);
+                        }
+                        continue;
+                    }
+                }
+
                 $finalText = implode("\n\n", $allDisplayText);
                 $conversationHistory[] = ['role' => 'assistant', 'content' => $finalText];
                 $this->logTranscript('assistant_message', 'assistant', $finalText, $response);
 
                 if ($this->debug) {
-                    $this->ui->dim("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls");
+                    $this->ui->dim("[Agent] Complete after {$iteration} iterations, {$totalToolCalls} tool calls, {$nudgeCount} nudges");
                 }
                 return $this->buildResult($finalText, $allToolsUsed);
             }
+
+            // Reset nudge count when model is making tool calls (it's working)
+            $nudgeCount = 0;
 
             // --- Stuck detection ---
 
@@ -186,6 +256,9 @@ class AgentExecutor
             $this->usage?->recordToolCalls(count($toolResults));
             foreach ($toolResults as $r) {
                 $allToolsUsed[] = ['tool' => $r['tool']];
+                if ($r['result']['success'] ?? false) {
+                    $this->completedActions[] = $r['tool'] . ': ' . $this->summarizeArgs($r['args']);
+                }
             }
 
             // Check for consecutive all-failed iterations
@@ -211,11 +284,298 @@ class AgentExecutor
                 $consecutiveFailures = 0;
             }
 
-            // Feed results back to the model
+            // Feed results back to the model with enhanced continuation prompt
             $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
-            $resultMessage = $this->formatToolResults($toolResults);
+            $resultMessage = $this->formatToolResults($toolResults, $totalToolCalls);
             $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
         }
+    }
+
+    /**
+     * Determine if the model seems to have stopped mid-task and needs a nudge.
+     *
+     * Small models often produce text like "Now I'll create the files..."
+     * without actually making tool calls. This detects that pattern.
+     *
+     * Also detects "hallucinated completion" — when the model claims it created
+     * multiple files but only made a few file_write calls.
+     */
+    private function shouldNudgeContinuation(string $displayText, string $rawContent, int $totalToolCalls, int $nudgeCount): bool
+    {
+        // Don't nudge forever
+        if ($nudgeCount >= $this->maxNudges) return false;
+
+        // If no tool calls were made at all and the response mentions future actions, nudge
+        if ($totalToolCalls === 0 && $this->mentionsFutureWork($rawContent)) {
+            return true;
+        }
+
+        // If some tool calls were made but response looks like a mid-task summary
+        if ($totalToolCalls > 0 && $this->looksLikeMidTaskPause($displayText, $rawContent)) {
+            return true;
+        }
+
+        // If the response is very short and we've been working (likely a "done creating dirs" type msg)
+        if ($totalToolCalls > 0 && mb_strlen(trim($displayText)) < 200 && $this->mentionsFutureWork($rawContent)) {
+            return true;
+        }
+
+        // HALLUCINATED COMPLETION: model claims it created files but the tool counts don't match
+        if ($totalToolCalls > 0 && $this->claimsMoreThanDone($displayText . ' ' . $rawContent)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Detect when the model's summary mentions more files/items than were actually
+     * created via file_write tool calls. This catches the common small-model pattern
+     * of "I created index.html, styles.css, and script.js" when only one file_write was made.
+     */
+    private function claimsMoreThanDone(string $text): bool
+    {
+        // Count file_write actions in completed actions
+        $writeCount = 0;
+        foreach ($this->completedActions as $action) {
+            if (str_starts_with($action, 'file_write:') || str_starts_with($action, 'file_append:')) {
+                $writeCount++;
+            }
+        }
+
+        // Count files mentioned in the response (looks for filename patterns)
+        $mentionedFiles = 0;
+        // Match patterns like "index.html", "styles.css", "`script.js`", "**main.py**"
+        if (preg_match_all('/[`*]*[\w\-\/]+\.(html|css|js|ts|php|py|json|xml|yml|yaml|md|txt|rb|go|rs|java|sh|tsx|jsx|vue|svelte)[`*]*/i', $text, $matches)) {
+            // Deduplicate
+            $uniqueFiles = array_unique($matches[0]);
+            $mentionedFiles = count($uniqueFiles);
+        }
+
+        // If the model mentions significantly more files than it actually wrote, it's hallucinating
+        if ($mentionedFiles > 1 && $writeCount < $mentionedFiles) {
+            if ($this->debug) {
+                $this->ui->dim("[Agent] Hallucination check: model mentions {$mentionedFiles} files but only wrote {$writeCount}");
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if the response mentions planned future actions (suggesting it's not done).
+     */
+    private function mentionsFutureWork(string $text): bool
+    {
+        $patterns = [
+            '/\b(next|now)\s+(i\'?ll|i\s+will|we\s+will|let\s+me|i\s+need\s+to|we\s+need\s+to)\b/i',
+            '/\b(going\s+to|need\s+to|should|will)\s+(create|write|add|build|implement|set\s+up|generate|make|configure|modify|update)\b/i',
+            '/\bstep\s+\d+/i',
+            '/\bfirst,?\s+(let\'?s|i\'?ll|we\'?ll)\b/i',
+            '/\bhere\'?s?\s+(the|my|our)\s+(plan|approach|strategy)\b/i',
+            '/\bnow\s+(?:let\'?s|i\'?ll|we\s+can)\s+(?:move|proceed|continue)\b/i',
+            '/\bi\'?(?:ll|m going to)\s+(?:start|begin)\s+(?:by|with)\b/i',
+            '/\bremaining\s+(?:steps|tasks|files|work)\b/i',
+            '/\bthen\s+(?:i\'?ll|we\'?ll|i\s+will)\b/i',
+        ];
+
+        foreach ($patterns as $p) {
+            if (preg_match($p, $text)) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if the response looks like a mid-task pause rather than completion.
+     */
+    private function looksLikeMidTaskPause(string $displayText, string $rawContent): bool
+    {
+        $combined = $displayText . ' ' . $rawContent;
+
+        // Mentions creating/writing things that haven't been done via tools
+        $actionWords = ['create', 'write', 'add', 'generate', 'build', 'implement', 'set up'];
+        $futureIndicators = ['will', 'going to', 'need to', 'should', "let's", "let me", "i'll", 'next'];
+
+        $hasAction = false;
+        $hasFuture = false;
+        $lower = strtolower($combined);
+
+        foreach ($actionWords as $w) {
+            if (str_contains($lower, $w)) { $hasAction = true; break; }
+        }
+        foreach ($futureIndicators as $w) {
+            if (str_contains($lower, $w)) { $hasFuture = true; break; }
+        }
+
+        // Mentions a list of files/items to create
+        if (preg_match('/(?:files?|pages?|components?|sections?)\s*(?:to\s+)?(?:create|include|build).*?:/i', $combined)) {
+            return true;
+        }
+
+        return $hasAction && $hasFuture;
+    }
+
+    /**
+     * Build a nudge message to get the model back on track.
+     */
+    private function buildContinuationNudge(int $nudgeCount): string
+    {
+        $progress = '';
+        if (!empty($this->completedActions)) {
+            $recent = array_slice($this->completedActions, -5);
+            $progress = "So far you've done: " . implode(', ', $recent) . ".\n\n";
+        }
+
+        switch ($nudgeCount) {
+            case 1:
+                return $progress .
+                    "Don't describe what you plan to do — actually do it now. " .
+                    "Use your tools to take the next action. Make a tool_call for the next step.";
+
+            case 2:
+                return $progress .
+                    "You are narrating instead of acting. You MUST use tool_call to proceed. " .
+                    "Pick the single most important next step and execute it with a tool_call right now. " .
+                    "Do NOT write any explanation — just the tool_call.";
+
+            default:
+                return $progress .
+                    "IMPORTANT: Your ONLY job right now is to make a tool_call. " .
+                    "No text, no explanation. Just output a tool_call for the next action. " .
+                    "Example: <tool_call>{\"name\": \"file_write\", \"args\": {\"path\": \"...\", \"content\": \"...\"}}</tool_call>";
+        }
+    }
+
+    /**
+     * After the model signals completion, do a verification review.
+     *
+     * Instead of trusting the model's claims, we:
+     * 1. Check which files were actually written via tools
+     * 2. Use dir_list to verify they exist on disk
+     * 3. If files are missing, tell the model exactly what's missing and nudge it to create them
+     *
+     * Returns null if the review passed (no issues), or modifies
+     * conversationHistory and returns non-null to continue the loop.
+     */
+    private function selfReview(string $role, array &$conversationHistory, string $systemPrompt, array &$allDisplayText): ?string
+    {
+        // Gather paths that were written to
+        $writtenPaths = [];
+        $createdDirs = [];
+        foreach ($this->completedActions as $action) {
+            if (str_starts_with($action, 'file_write:')) {
+                $writtenPaths[] = trim(substr($action, strlen('file_write:')));
+            } elseif (str_starts_with($action, 'mkdir:')) {
+                $createdDirs[] = trim(substr($action, strlen('mkdir:')));
+            }
+        }
+
+        // If directories were created but few files written, verify the dirs
+        if (!empty($createdDirs) && count($writtenPaths) <= 1) {
+            // Use dir_list tool to check what actually exists
+            $verifyResults = [];
+            foreach (array_slice($createdDirs, 0, 3) as $dir) {
+                $result = $this->tools->execute('dir_list', ['path' => $dir]);
+                if ($result['success'] ?? false) {
+                    $entries = $result['data'] ?? [];
+                    $fileCount = 0;
+                    if (is_array($entries)) {
+                        foreach ($entries as $entry) {
+                            if (is_array($entry) && ($entry['type'] ?? '') === 'file') $fileCount++;
+                            elseif (is_string($entry)) $fileCount++;
+                        }
+                    }
+                    $verifyResults[$dir] = $fileCount;
+                }
+            }
+
+            // Check if dirs are mostly empty (model didn't write files)
+            $emptyDirs = [];
+            foreach ($verifyResults as $dir => $fileCount) {
+                if ($fileCount < 2) $emptyDirs[] = $dir;
+            }
+
+            if (!empty($emptyDirs)) {
+                if ($this->debug) {
+                    $this->ui->dim("[Agent] Review: directories exist but are mostly empty: " . implode(', ', $emptyDirs));
+                }
+
+                $reviewPrompt = "STOP. I checked your work and there's a problem.\n\n" .
+                    "Original request: \"{$this->truncate($this->originalRequest, 300)}\"\n\n" .
+                    "You created directories but these are empty or nearly empty:\n" .
+                    implode("\n", array_map(fn($d) => "- {$d} ({$verifyResults[$d]} files)", $emptyDirs)) . "\n\n" .
+                    "Files actually written: " . (empty($writtenPaths) ? "NONE" : implode(', ', $writtenPaths)) . "\n\n" .
+                    "You need to create the actual content files. Start with the most important file and use file_write to create it now. " .
+                    "Do NOT describe what you'll create — just make the tool_call.";
+
+                $conversationHistory[] = ['role' => 'user', 'content' => $reviewPrompt];
+                return 'continue';
+            }
+        }
+
+        // Also check: did the model's last response mention files that weren't written?
+        $lastDisplay = end($allDisplayText) ?: '';
+        if ($this->claimsMoreThanDone($lastDisplay)) {
+            $reviewPrompt = "STOP. Your summary mentions files that don't exist yet.\n\n" .
+                "Files actually written with file_write: " . (empty($writtenPaths) ? "NONE" : implode(', ', $writtenPaths)) . "\n\n" .
+                "Go back and create the missing files. Use file_write for each one. Start now with the next file.";
+
+            $conversationHistory[] = ['role' => 'user', 'content' => $reviewPrompt];
+            return 'continue';
+        }
+
+        // Everything looks consistent — ask model for a brief review
+        $reviewPrompt = "Quick check — the original request was: \"{$this->truncate($this->originalRequest, 200)}\"\n" .
+            "Files written: " . (empty($writtenPaths) ? "none" : implode(', ', $writtenPaths)) . "\n" .
+            "Is anything missing? If yes, create it with tool_call. If complete, give a brief summary.";
+
+        $conversationHistory[] = ['role' => 'user', 'content' => $reviewPrompt];
+
+        $messages = array_merge(
+            [['role' => 'system', 'content' => $systemPrompt]],
+            $conversationHistory
+        );
+
+        $this->ui->thinking('Reviewing');
+        $response = $this->router->chat($role, $messages);
+        $this->ui->thinkingDone();
+
+        $this->usage?->recordLLMCall($response);
+
+        if (!($response['success'] ?? false)) return null;
+
+        $rawContent = $response['content'] ?? '';
+        $parsed = $this->parser->parse($rawContent);
+
+        if ($parsed['has_tool_calls']) {
+            // Review found issues — add response and continue loop
+            $conversationHistory[] = ['role' => 'assistant', 'content' => $rawContent];
+
+            // Execute the review's tool calls
+            $toolResults = $this->executeToolCalls($parsed['tool_calls'], $response);
+            $resultMessage = $this->formatToolResults($toolResults, count($this->completedActions));
+            $conversationHistory[] = ['role' => 'user', 'content' => $resultMessage];
+
+            foreach ($toolResults as $r) {
+                if ($r['result']['success'] ?? false) {
+                    $this->completedActions[] = '[review] ' . $r['tool'] . ': ' . $this->summarizeArgs($r['args']);
+                }
+            }
+
+            return 'continue'; // Signal to continue the loop
+        }
+
+        // Review passed — add the review summary to display text
+        if ($parsed['display']) {
+            array_pop($conversationHistory); // remove the review prompt
+            $allDisplayText[] = $parsed['display'];
+        } else {
+            array_pop($conversationHistory);
+        }
+
+        return null;
     }
 
     /**
@@ -310,8 +670,9 @@ class AgentExecutor
 
     /**
      * Format tool results into a message the model can understand.
+     * Includes progress awareness and strong continuation guidance.
      */
-    private function formatToolResults(array $results): string
+    private function formatToolResults(array $results, int $totalToolCalls): string
     {
         $parts = ["[Tool Results]"];
 
@@ -333,9 +694,63 @@ class AgentExecutor
             }
         }
 
-        $parts[] = "\nContinue working on the user's request. Call more tools if needed, or provide your final response when done.";
+        // Build progress-aware continuation prompt
+        $parts[] = "\n[Continuation]";
+        $parts[] = "Tools used so far: {$totalToolCalls}. Original request: \"{$this->truncate($this->originalRequest, 200)}\"";
+
+        if (!empty($this->completedActions)) {
+            $recent = array_slice($this->completedActions, -8);
+            $parts[] = "Completed: " . implode(' | ', $recent);
+        }
+
+        $parts[] = "If there is more work to do, make your next tool_call now. Do NOT narrate what you plan to do — just do it.";
+        $parts[] = "If the task is fully complete, provide a brief summary of what was accomplished.";
 
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * Extract the original user request from conversation history.
+     */
+    private function extractOriginalRequest(array $history): string
+    {
+        // Find the last user message
+        for ($i = count($history) - 1; $i >= 0; $i--) {
+            if (($history[$i]['role'] ?? '') === 'user') {
+                $content = $history[$i]['content'] ?? '';
+                // Skip tool result messages
+                if (!str_starts_with($content, '[Tool Results]')) {
+                    return $content;
+                }
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Create a short summary of tool args for progress tracking.
+     */
+    private function summarizeArgs(array $args): string
+    {
+        // Prefer path/file/command as the summary
+        foreach (['path', 'file', 'command', 'action', 'url', 'goal'] as $key) {
+            if (isset($args[$key]) && is_string($args[$key])) {
+                $val = $args[$key];
+                if (mb_strlen($val) > 60) $val = mb_substr($val, 0, 57) . '...';
+                return $val;
+            }
+        }
+        $keys = array_keys($args);
+        return implode(',', array_slice($keys, 0, 3));
+    }
+
+    /**
+     * Truncate a string with ellipsis.
+     */
+    private function truncate(string $text, int $max): string
+    {
+        if (mb_strlen($text) <= $max) return $text;
+        return mb_substr($text, 0, $max - 3) . '...';
     }
 
     /**

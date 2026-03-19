@@ -115,15 +115,27 @@ class ChatCommand extends BaseCommand
 
             $conversationHistory[] = ['role' => 'user', 'content' => $input];
 
+            // Auto-detect task type and switch module/role if on default reasoning
+            $effectiveModule = $this->currentModule;
+            $effectiveRole = $this->currentRole;
+            $autoDetected = $this->autoDetectModule($input);
+            if ($autoDetected && $this->currentModule === 'reasoning') {
+                $effectiveModule = $autoDetected['module'];
+                $effectiveRole = $autoDetected['role'];
+                if ($this->debugMode) {
+                    $this->ui->dim("[Auto] Switched to {$effectiveModule} module for this request");
+                }
+            }
+
             // Build system prompt with memory context
-            $systemPrompt = $this->promptBuilder->buildSystemPrompt($this->currentModule, [
+            $systemPrompt = $this->promptBuilder->buildSystemPrompt($effectiveModule, [
                 'session_id' => $sessionId,
             ]);
 
             // Execute agent loop — returns {text, usage}
             // The executor shows its own thinking/working indicators
             $this->ui->newLine();
-            $result = $this->agent->execute($this->currentRole, $conversationHistory, $systemPrompt);
+            $result = $this->agent->execute($effectiveRole, $conversationHistory, $systemPrompt);
             $responseText = $result['text'] ?? '';
             $turnUsage = $result['usage'] ?? null;
             $toolsUsed = $result['tools_used'] ?? [];
@@ -407,5 +419,86 @@ class ChatCommand extends BaseCommand
             'Last heartbeat' => $heartbeat['last_check'] ?? 'never',
             'Session usage'  => $sessionSummary ?: 'none yet',
         ]);
+    }
+
+    /**
+     * Auto-detect which module best fits the user's request.
+     *
+     * Returns ['module' => ..., 'role' => ...] or null if no strong match
+     * (stays on current module). Only triggers when on the default 'reasoning'
+     * module — if the user manually set a module, we respect that.
+     *
+     * Detection order matters: more specific modules are checked first.
+     */
+    private function autoDetectModule(string $input): ?array
+    {
+        // Browser module — fetching/scraping web content
+        if ($this->matchesPatterns($input, [
+            '/\b(fetch|scrape|get|open|load|visit|browse|crawl)\b.+\b(url|page|site|website|link|webpage)\b/i',
+            '/\b(url|page|site|website|link|webpage)\b.+\b(fetch|scrape|get|open|load|visit|browse|crawl)\b/i',
+            '/\bfetch\s+https?:\/\//i',
+            '/\bget\s+(the\s+)?(content|text|html)\s+(from|of|at)\b/i',
+            '/\bwhat\'?s?\s+(on|at)\s+https?:\/\//i',
+            '/\bsummarize\s+(this\s+)?(url|page|site|link|article)\b/i',
+            '/\bdownload\s+(the\s+)?(page|content|html)\b/i',
+            '/\bhttp[s]?:\/\/\S+/i', // Contains a URL
+        ])) {
+            return ['module' => 'browser', 'role' => 'browser'];
+        }
+
+        // Coding module — file creation, code changes, development tasks
+        if ($this->matchesPatterns($input, [
+            '/\b(create|build|make|write|code|generate|scaffold|implement)\b.+\b(website|site|app|application|page|file|script|project|api|server|component|module|function|class)\b/i',
+            '/\b(website|site|app|application|page|file|script|project|api|server)\b.+\b(create|build|make|write|code|generate|scaffold)\b/i',
+            '/\b(html|css|javascript|js|php|python|react|vue|angular|node|typescript|ts|rust|go|java|ruby|swift|dart|kotlin)\b.+\b(code|create|build|write|file|project|app)\b/i',
+            '/\b(refactor|debug|fix|patch|update|modify|edit|change)\b.+\b(code|file|function|class|method|bug|error|issue)\b/i',
+            '/\b(add|install|remove|update)\b.+\b(dependency|package|module|library|feature)\b/i',
+            '/\b(set\s+up|setup|init|initialize|bootstrap|start)\b.+\b(project|repo|repository|app|application|environment)\b/i',
+            '/\bin\s+(my|the|your)\s+(home|project|work)\s+(directory|folder|dir)\b/i',
+            '/\bcreate\s+(a\s+)?[\w\s]*\.(html|php|js|ts|py|css|json|yml|yaml|xml|md|txt|rb|go|rs|java|sh)\b/i',
+            '/\b(run|execute)\s+(the\s+)?(tests?|linter?|build|make)\b/i',
+            '/\b(commit|push|pull|merge|branch|checkout|stash|rebase|cherry-?pick)\b/i',
+            '/\b(deploy|docker|container|kubernetes|k8s)\b.+\b(build|create|run|start|push)\b/i',
+            '/\bwrite\s+(me\s+)?(a\s+)?(script|program|function|class|module|tool)\b/i',
+        ])) {
+            return ['module' => 'coding', 'role' => 'coding'];
+        }
+
+        // Planner module — planning, breaking down tasks, strategy
+        if ($this->matchesPatterns($input, [
+            '/\b(plan|outline|break\s+down|decompose|map\s+out|design|architect|roadmap)\b.+\b(task|project|feature|migration|refactor|implementation|approach|strategy)\b/i',
+            '/\b(how\s+should\s+(I|we))\b.+\b(approach|tackle|implement|build|design|structure|organize)\b/i',
+            '/\b(what\s+(are|would\s+be))\s+(the\s+)?steps\b/i',
+            '/\bplan\s+(for|to|how|out)\b/i',
+            '/\bstep[\s-]by[\s-]step\b.+\b(plan|guide|approach|instructions)\b/i',
+            '/\bcreate\s+(a\s+)?(plan|roadmap|outline|checklist)\b/i',
+            '/\bbreak\s+(this|it)\s+(down|into|up)\b/i',
+        ])) {
+            return ['module' => 'planner', 'role' => 'planning'];
+        }
+
+        // Summarizer module — summarization requests
+        if ($this->matchesPatterns($input, [
+            '/\b(summarize|summarise|tldr|tl;dr|sum\s+up|condense|digest)\b/i',
+            '/\bgive\s+me\s+(a\s+)?(summary|overview|brief|recap|rundown|gist)\b/i',
+            '/\bwhat\s+(are|were)\s+the\s+(key|main|important)\s+(points?|takeaways?|findings?)\b/i',
+            '/\b(shorten|compress|reduce)\s+(this|the|that)\b/i',
+        ])) {
+            return ['module' => 'summarizer', 'role' => 'summarization'];
+        }
+
+        // No strong match — stay on current module
+        return null;
+    }
+
+    /**
+     * Check if input matches any of the given regex patterns.
+     */
+    private function matchesPatterns(string $input, array $patterns): bool
+    {
+        foreach ($patterns as $p) {
+            if (preg_match($p, $input)) return true;
+        }
+        return false;
     }
 }
