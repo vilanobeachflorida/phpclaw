@@ -262,6 +262,127 @@ class AgentApiController extends BaseController
         ]);
     }
 
+    // ─── Browser Control ─────────────────────────────────────────────
+
+    /**
+     * GET /api/browser/pending
+     *
+     * Called by the Chrome extension to fetch the next pending command.
+     * Returns 204 if no commands are queued.
+     */
+    public function browserPending()
+    {
+        $browserDir = rtrim(WRITEPATH, '/') . '/agent/browser';
+        $queueDir = $browserDir . '/commands';
+
+        if (!is_dir($browserDir)) mkdir($browserDir, 0755, true);
+        if (!is_dir($queueDir)) mkdir($queueDir, 0755, true);
+
+        // Update heartbeat
+        file_put_contents($browserDir . '/heartbeat.json', json_encode(['timestamp' => time()]));
+
+        // Clean stale results (older than 2 minutes)
+        $resultDir = $browserDir . '/results';
+        if (is_dir($resultDir)) {
+            foreach (glob($resultDir . '/*.json') as $stale) {
+                if (filemtime($stale) < time() - 120) @unlink($stale);
+            }
+        }
+
+        // Quick-hold poll: check for commands, hold for up to 500ms if none found.
+        // The 500ms hold keeps the extension's fetch in-flight, which prevents
+        // Chrome from suspending the MV3 service worker. The extension loops
+        // these fetches continuously to stay alive.
+        // 500ms is short enough to not meaningfully block the single-threaded
+        // PHP dev server for other requests (agent:chat runs in a separate process).
+        $checks = 10; // 10 checks × 50ms = 500ms max hold
+        for ($i = 0; $i < $checks; $i++) {
+            $files = glob($queueDir . '/*.json');
+            if (!empty($files)) {
+                usort($files, fn($a, $b) => filemtime($a) - filemtime($b));
+
+                foreach ($files as $file) {
+                    if (filemtime($file) < time() - 90) {
+                        @unlink($file);
+                        continue;
+                    }
+
+                    $command = json_decode(file_get_contents($file), true);
+                    @unlink($file);
+
+                    if ($command) {
+                        return $this->response
+                            ->setHeader('Access-Control-Allow-Origin', '*')
+                            ->setJSON($command);
+                    }
+                }
+            }
+
+            if ($i < $checks - 1) usleep(50000); // 50ms
+        }
+
+        return $this->response
+            ->setHeader('Access-Control-Allow-Origin', '*')
+            ->setStatusCode(204)->setBody('');
+    }
+
+    /**
+     * POST /api/browser/result
+     *
+     * Called by the Chrome extension to submit the result of a command.
+     * Body: { id: "command_id", success: bool, data: {...}, error: "..." }
+     */
+    public function browserResult()
+    {
+        $body = $this->request->getJSON(true) ?? [];
+        $commandId = $body['id'] ?? '';
+
+        if (!$commandId) {
+            return $this->response
+                ->setHeader('Access-Control-Allow-Origin', '*')
+                ->setStatusCode(400)
+                ->setJSON(['error' => 'Missing command id']);
+        }
+
+        $resultDir = rtrim(WRITEPATH, '/') . '/agent/browser/results';
+        if (!is_dir($resultDir)) mkdir($resultDir, 0755, true);
+
+        // Write result file that the BrowserControlTool is polling for
+        $resultFile = $resultDir . "/{$commandId}.json";
+        file_put_contents($resultFile, json_encode($body, JSON_PRETTY_PRINT));
+
+        // Clean up the command file if still present
+        $commandFile = rtrim(WRITEPATH, '/') . "/agent/browser/commands/{$commandId}.json";
+        @unlink($commandFile);
+
+        return $this->response
+            ->setHeader('Access-Control-Allow-Origin', '*')
+            ->setJSON(['status' => 'received']);
+    }
+
+    /**
+     * GET /api/browser/status
+     *
+     * Check if the Chrome extension is connected (has polled recently).
+     */
+    public function browserStatus()
+    {
+        $heartbeatFile = rtrim(WRITEPATH, '/') . '/agent/browser/heartbeat.json';
+
+        if (!file_exists($heartbeatFile)) {
+            return $this->response->setJSON(['connected' => false, 'last_seen' => null]);
+        }
+
+        $data = json_decode(file_get_contents($heartbeatFile), true);
+        $lastSeen = $data['timestamp'] ?? 0;
+        $connected = (time() - $lastSeen) < 5; // Consider connected if polled in last 5 seconds
+
+        return $this->response->setJSON([
+            'connected' => $connected,
+            'last_seen' => date('c', $lastSeen),
+        ]);
+    }
+
     // ─── Documentation ───────────────────────────────────────────────
 
     /**

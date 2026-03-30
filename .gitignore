@@ -24,6 +24,7 @@ agent/writable/agent/workspace/
 agent/writable/agent/plans/
 agent/writable/agent/context_stash/
 agent/writable/agent/cookies/
+agent/writable/agent/browser/
 
 # ── Agent execution targets config (may contain keys) ────
 agent/writable/agent/config/exec_targets.json

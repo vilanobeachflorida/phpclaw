@@ -9,7 +9,7 @@ namespace App\Libraries\Tools;
 class BrowserTextTool extends BaseTool
 {
     protected string $name = 'browser_text';
-    protected string $description = 'Extract readable text from web page with browser spoofing and session support';
+    protected string $description = 'Extract readable text from web page server-side via curl (headless, invisible). Use browser_control instead if the user wants to see or interact with a real browser';
 
     public function getInputSchema(): array
     {

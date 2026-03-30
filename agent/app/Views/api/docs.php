@@ -416,7 +416,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
         <tr><td><code>503</code></td><td>API disabled / not configured</td><td><code>{"error": "API token not configured", ...}</code></td></tr>
     </table>
 
-    <footer>PHPClaw v0.1.0 &mdash; Terminal-first multi-model AI agent shell</footer>
+    <footer>PHPClaw v0.2.0 &mdash; Terminal-first multi-model AI agent shell</footer>
 </div>
 
 <script>

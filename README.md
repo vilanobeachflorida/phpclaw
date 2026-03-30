@@ -5,7 +5,7 @@ Self-hosted AI agent that you can run anywhere and access from anything. Use it 
 ```
   ╔══════════════════════════════════════════════╗
   ║           PHPClaw Agent Shell                ║
-  ║                 v0.1.0                       ║
+  ║                 v0.2.0                       ║
   ╚══════════════════════════════════════════════╝
 
   reasoning:ollama ❯ fetch the top 5 hacker news stories and summarize them
@@ -115,7 +115,7 @@ There's no iteration limit. The agent runs until it's done. If it gets stuck (sa
 
 ## Built-in Tools
 
-PHPClaw ships with 34 built-in tools across several categories:
+PHPClaw ships with 35 built-in tools across several categories:
 
 ### File Operations
 
@@ -165,10 +165,11 @@ PHPClaw ships with 34 built-in tools across several categories:
 
 | Tool | Description |
 |------|-------------|
-| `http_get` | Make HTTP GET requests |
+| `http_get` | Make HTTP GET requests (server-side/headless) |
 | `http_request` | Full HTTP client (all methods, headers, body, auth) |
-| `browser_fetch` | Fetch and parse web pages |
-| `browser_text` | Extract text from web pages |
+| `browser_fetch` | Fetch and parse web pages (server-side/headless) |
+| `browser_text` | Extract text from web pages (server-side/headless) |
+| `browser_control` | Control the user's real Chrome browser via the PHPClaw extension |
 
 ### Data & Integration
 
@@ -257,12 +258,12 @@ The LLM understands intent, not just keywords — "how do I build an API?" stays
 
 | Module | Tools | Purpose |
 |--------|-------|---------|
-| **reasoning** | 3 | Deep analysis, Q&A (default) |
+| **reasoning** | all | Deep analysis, Q&A (default) |
 | **coding** | 19 | Code generation, refactoring, testing, deployment |
-| **browser** | 4 | Web fetching, scraping, content extraction |
-| **planner** | 3 | Task decomposition and step-by-step planning |
+| **browser** | 5 | Real browser control, web fetching, content extraction |
+| **planner** | 8 | Task decomposition with browser and web access |
 | **summarizer** | 1 | Content summarization |
-| **tool_router** | 34 | Catch-all with access to every tool |
+| **tool_router** | 35 | Catch-all with access to every tool |
 
 ### Small Model Enhancements
 
@@ -289,7 +290,7 @@ Use `/usage` for a full session breakdown with per-model costs. Local providers 
 # Core
 php spark agent:chat              # Interactive chat (main interface)
 php spark agent:setup             # Setup wizard
-php spark agent:serve             # Start background service
+php spark agent:serve             # Start API server + background service
 php spark agent:status            # System status
 
 # Providers & Models
@@ -364,16 +365,17 @@ php spark agent:config:reset --file providers  # Reset a single config file
         │  Router    │  │  Registry  │
         └────┬───────┘  └───┬────────┘
              │              │
-     ┌───────▼───────┐  ┌──▼──────────────┐
-     │  Providers     │  │  Tools           │
-     │  ┌──────────┐  │  │  file_read       │
-     │  │ Ollama   │  │  │  file_write      │
-     │  │ LMStudio │  │  │  shell_exec      │
-     │  │ ChatGPT  │  │  │  browser_fetch   │
-     │  │ Claude   │  │  │  grep_search     │
-     │  │ OpenLLM  │  │  │  ...34 total     │
-     │  └──────────┘  │  └─────────────────┘
-     └────────────────┘
+     ┌───────▼───────┐  ┌──▼──────────────┐  ┌──────────────────┐
+     │  Providers     │  │  Tools           │  │  Chrome Extension │
+     │  ┌──────────┐  │  │  file_read       │  │  ┌──────────────┐│
+     │  │ Ollama   │  │  │  file_write      │  │  │Content Script ││
+     │  │ LMStudio │  │  │  shell_exec      │  │  │(polls + DOM) ││
+     │  │ ChatGPT  │  │  │  browser_control ◄──┤  └──────┬───────┘│
+     │  │ Claude   │  │  │  grep_search     │  │  ┌──────▼───────┐│
+     │  │ OpenLLM  │  │  │  ...35 total     │  │  │Service Worker ││
+     │  └──────────┘  │  └─────────────────┘  │  │(tab ops only) ││
+     └────────────────┘                        │  └──────────────┘│
+                                               └──────────────────┘
 ```
 
 **Providers** are LLM backends. Each has an adapter that normalizes the API.
@@ -467,13 +469,97 @@ curl -X POST http://localhost:8081/api/chat \
 
 The API server can be enabled/disabled in `writable/agent/config/api.json`. See the full **[API Documentation](docs/api.md)** for configuration, all endpoints, session flow, CORS, and code examples in cURL, Python, JavaScript, and PHP.
 
-## Running as a Service
+## Chrome Browser Control
 
-PHPClaw can run as a background service with a heartbeat loop:
+PHPClaw includes a Chrome extension that lets the agent control your real browser — opening tabs, clicking buttons, filling forms, reading pages, and navigating the web exactly like a human user. The agent sees an accessibility tree of the page (numbered interactive elements) and interacts by reference number, making it reliable across any website.
+
+```
+  reasoning:lmstudio ❯ go to medieval-europe.eu, log in as chobani, and get the player list
+
+    ▸ browser
+    ✓ browser_control navigate → medieval-europe.eu
+    ✓ browser_control snapshot → [20] text field "Username" [21] password field ...
+    ✓ browser_control type ref:20 "chobani"
+    ✓ browser_control type ref:21 "c83b1"
+    ✓ browser_control click ref:22 "Login"
+    ✓ browser_control snapshot → logged in, found player list link
+    ✓ browser_control click ref:6 "Players"
+    ✓ browser_control read_text → player data
+    ✓ browser_control release
+
+  The top 5 most recently logged-in players are...
+```
+
+### Setting Up the Extension
 
 ```bash
-# Start the service
+# 1. Start the API server
 php spark agent:serve
+
+# 2. Install the Chrome extension
+#    Open chrome://extensions → Enable Developer Mode → Load Unpacked
+#    Select the chrome-extension/ directory
+
+# 3. Connect
+#    Click the PHPClaw extension icon → enter your server URL and API token → Connect
+#    The badge turns green when connected
+```
+
+### How It Works
+
+The extension uses a content-script architecture for reliability:
+
+- **Content script** runs on every page and never gets suspended. It polls the server for commands and executes DOM operations (click, type, read, scroll) directly in the page.
+- **Service worker** is a thin helper that only handles Chrome API calls (navigate, new tab, screenshot, cookies). These are instant one-shot calls.
+- **Accessibility tree** — when navigating to a page, the extension returns a numbered list of all interactive elements. The agent references elements by number instead of guessing CSS selectors.
+
+### Browser Control Actions
+
+| Action | Description |
+|--------|-------------|
+| `navigate` | Go to a URL (returns page snapshot with numbered elements) |
+| `new_tab` | Open a new tab |
+| `snapshot` | Get the accessibility tree of the current page |
+| `click` | Click an element by ref number, CSS selector, or text description |
+| `type` | Type into a field by ref number, selector, or description |
+| `read_text` | Read visible text content from the page |
+| `read_html` | Get HTML of the page or an element |
+| `scroll` | Scroll up, down, to top, or to bottom |
+| `screenshot` | Capture the visible tab |
+| `get_links` | Get all links on the page |
+| `get_forms` | Get all forms and their fields |
+| `fill_form` | Fill multiple form fields at once |
+| `submit_form` | Submit a form |
+| `smart_login` | Auto-detect login form, fill credentials, and submit |
+| `execute_js` | Run arbitrary JavaScript in the page |
+| `get_tabs` | List all open tabs |
+| `switch_tab` | Switch the controlled tab |
+| `close_tab` | Close a tab |
+| `wait_for` | Wait for an element to appear |
+| `get_cookies` | Get cookies for the current page |
+| `go_back` / `go_forward` | Browser history navigation |
+| `reload` | Reload the page |
+| `release` | Release control of the tab (removes border indicator) |
+
+### Visual Indicators
+
+- **Cyan border + "PHPClaw" label** appears on the controlled tab when the agent is actively working
+- **Lightning bolt** in the tab title (e.g. `⚡ Google`) so you can identify the controlled tab from any other tab
+- **Badge** on the extension icon: green (connected), orange (connecting), blue (executing command)
+
+## Running as a Service
+
+PHPClaw can run as a background service that includes both the API server and the heartbeat/maintenance loop:
+
+```bash
+# Start everything (API server + service loop)
+php spark agent:serve
+
+# Start with custom port
+php spark agent:serve --port 9000
+
+# Start service loop only (no API server)
+php spark agent:serve --no-api
 
 # Or use systemd (Linux)
 sudo cp phpclaw.service /etc/systemd/system/
@@ -481,7 +567,7 @@ sudo systemctl enable phpclaw
 sudo systemctl start phpclaw
 ```
 
-The service handles health checks, task execution, memory compaction, and cache pruning on configurable intervals.
+The service handles health checks, task execution, memory compaction, and cache pruning on configurable intervals. The API server enables the Chrome extension, REST API, and interactive docs.
 
 ## Extending PHPClaw
 
@@ -512,6 +598,7 @@ Edit prompt templates in `writable/agent/prompts/`:
 See the `docs/` directory for detailed documentation:
 
 - [REST API](docs/api.md) — API server, endpoints, authentication, and examples
+- [Browser Control](docs/browser-control.md) — Chrome extension setup, architecture, and all actions
 - [Architecture](docs/architecture.md) — system design and component overview
 - [Providers](docs/providers.md) — provider configuration and custom adapters
 - [Tools](docs/tools.md) — tool system, all 34 built-in tools, testing, and custom tool development

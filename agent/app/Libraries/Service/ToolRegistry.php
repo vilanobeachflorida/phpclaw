@@ -15,7 +15,8 @@ use App\Libraries\Tools\{
     ArchiveExtractTool, ProcessManagerTool, NotificationSendTool,
     ExecTargetTool, ProjectDetectTool, TestRunnerTool,
     LintCheckTool, CodeSymbolsTool, TaskPlannerTool,
-    BuildRunnerTool, ErrorParserTool, ContextManagerTool
+    BuildRunnerTool, ErrorParserTool, ContextManagerTool,
+    BrowserControlTool
 };
 
 /**
@@ -61,6 +62,7 @@ class ToolRegistry
         'build_runner'      => BuildRunnerTool::class,
         'error_parser'      => ErrorParserTool::class,
         'context_manager'   => ContextManagerTool::class,
+        'browser_control'   => BrowserControlTool::class,
     ];
 
     public function __construct(?ConfigLoader $config = null)

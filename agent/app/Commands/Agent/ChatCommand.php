@@ -277,7 +277,7 @@ class ChatCommand extends BaseCommand
         $toolCount = count($this->tools->all());
         $enabledProviders = count($this->providers->listEnabled());
 
-        $this->ui->banner('PHPClaw Agent Shell', 'v0.1.0');
+        $this->ui->banner('PHPClaw Agent Shell', 'v0.2.0');
 
         $this->ui->keyValue([
             'Tools'     => "{$toolCount} loaded",
@@ -472,7 +472,7 @@ class ChatCommand extends BaseCommand
     private function llmClassify(string $input): ?array
     {
         $messages = [
-            ['role' => 'system', 'content' => 'Classify into: reasoning, coding, browser, planner, summarizer. Questions=reasoning. Commands=action type. One word only.'],
+            ['role' => 'system', 'content' => 'Classify into: reasoning, coding, browser, planner, summarizer. Questions=reasoning. Commands=action type. If the request involves visiting URLs, opening websites, navigating web pages, or fetching web content=browser. Only use planner for abstract planning with no web/code action. One word only.'],
             ['role' => 'user', 'content' => $input],
         ];
 

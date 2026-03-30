@@ -5,7 +5,7 @@ namespace App\Libraries\Tools;
 class HttpGetTool extends BaseTool
 {
     protected string $name = 'http_get';
-    protected string $description = 'Make HTTP GET request with browser-like session and cookie support';
+    protected string $description = 'Make HTTP GET request server-side (headless, no visible browser). Use browser_control instead if the user wants to see or interact with a real browser';
 
     public function getInputSchema(): array
     {

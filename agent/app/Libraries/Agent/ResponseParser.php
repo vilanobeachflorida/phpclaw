@@ -239,6 +239,16 @@ class ResponseParser
 
         $data = json_decode($json, true);
 
+        // If decode failed, try repairing mismatched braces
+        if ($data === null) {
+            $open = substr_count($json, '{');
+            $close = substr_count($json, '}');
+            if ($open > $close) {
+                $json .= str_repeat('}', $open - $close);
+            }
+            $data = json_decode($json, true);
+        }
+
         if (!$data || !isset($data['name'])) {
             return null;
         }

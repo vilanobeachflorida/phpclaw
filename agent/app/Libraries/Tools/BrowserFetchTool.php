@@ -5,7 +5,7 @@ namespace App\Libraries\Tools;
 class BrowserFetchTool extends BaseTool
 {
     protected string $name = 'browser_fetch';
-    protected string $description = 'Fetch web page content with full browser spoofing, cookies, and session persistence';
+    protected string $description = 'Fetch web page HTML server-side via curl (headless, invisible). Use browser_control instead if the user wants to see or interact with a real browser';
 
     public function getInputSchema(): array
     {
